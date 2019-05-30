@@ -42,21 +42,16 @@ CREATE SCHEMA IF NOT EXISTS pgt;
 CREATE SEQUENCE IF NOT EXISTS heimdal.ids;
 CREATE TYPE heimdal.enc_type AS ENUM (
     'aes128-cts-hmac-sha1-96',
-    'aes256-cts-hmac-sha1-96'
+    'aes256-cts-hmac-sha1-96',
+    'aes128-cts-hmac-sha256',
+    'aes256-cts-hmac-sha512'
     /* non-standard enc_type names will also be included here */
+    /* XXX populate moar */
 );
-CREATE TABLE IF NOT EXISTS heimdal.symmetric_key_enc_types (
-    etype               heimdal.enc_type,
-    CONSTRAINT setpk    PRIMARY KEY (etype)
-);
-INSERT INTO heimdal.symmetric_key_enc_types (etype)
-VALUES ('aes128-cts-hmac-sha1-96'),
-       ('aes256-cts-hmac-sha1-96')
-       /* XXX populate moar */
-ON CONFLICT DO NOTHING;
 CREATE TYPE heimdal.digest_type AS ENUM (
     'sha1',
-    'sha256'
+    'sha256',
+    'sha512'
     /* XXX add moar */
 );
 CREATE TYPE heimdal.key_type AS ENUM (
@@ -71,9 +66,29 @@ CREATE TYPE heimdal.key_type AS ENUM (
     'CERT-HASH'     /* enc_type will be digest name; enc_type will be digest alg */
 );
 CREATE TYPE heimdal.namespaces AS ENUM (
+    /*
+     * So, what we're going for here is that we want to be able to support
+     * distinct namespaces for several things for backwards compatibility
+     * reasons.  But we could, in a better world, have just one namespace, and
+     * then get rid of this ENUM type and all uses of it.
+     *
+     * XXX For now use only 'PRINCIPAL' -Nico
+     */
     'PRINCIPAL', 'ROLE', 'GROUP', 'ACL', 'HOST'
 );
 CREATE TYPE heimdal.entity_types AS ENUM (
+    /*
+     * This is different from namespaces only because the latter are about
+     * uniqueness, while this is about what kind of thing something is.
+     *
+     * If each kind of thing had a distinct namespace, then we'd not need this
+     * ENUM type at all either.
+     *
+     * What we really want is to lose this ENUM, and for namespacing we should
+     * build an extension that implements UName*It-style namespace rules.
+     *
+     * XXX For now use only 'USER'.
+     */
     'UNKNOWN-PRINCIPAL-TYPE', 'USER', 'ROLE', 'GROUP', 'CLUSTER', 'ACL'
 );
 CREATE TYPE heimdal.princ_flags AS ENUM (
@@ -84,6 +99,7 @@ CREATE TYPE heimdal.princ_flags AS ENUM (
     'DO-NOT-STORE'
 );
 CREATE TYPE heimdal.kerberos_name_type AS ENUM (
+    -- Principal name-types.
     'UNKNOWN', 'USER', 'HOST-BASED-SERVICE', 'DOMAIN-BASED-SERVICE'
 );
 CREATE TYPE heimdal.pkix_name_type AS ENUM (
@@ -97,9 +113,9 @@ CREATE TABLE IF NOT EXISTS heimdal.common (
     modified_by         TEXT DEFAULT (current_user),
     modified_at         TIMESTAMP WITHOUT TIME ZONE DEFAULT (current_timestamp),
     /* XXX Use an origin name or something better than IP:port */
-    origin_addr         INET NOT NULL DEFAULT (inet_server_addr()),
-    origin_port         INTEGER NOT NULL DEFAULT (inet_server_port()),
-    origin_txid         BIGINT NOT NULL DEFAULT (txid_current())
+    origin_addr         INET DEFAULT (inet_server_addr()),
+    origin_port         INTEGER DEFAULT (inet_server_port()),
+    origin_txid         BIGINT DEFAULT (txid_current())
 );
 /* Which enctypes are enabled or disabled globally */
 CREATE TABLE IF NOT EXISTS heimdal.enc_types (
@@ -111,7 +127,9 @@ CREATE TABLE IF NOT EXISTS heimdal.enc_types (
 );
 INSERT INTO heimdal.enc_types (ktype, etype)
 VALUES ('SYMMETRIC','aes128-cts-hmac-sha1-96'),
-       ('SYMMETRIC','aes256-cts-hmac-sha1-96')
+       ('SYMMETRIC','aes256-cts-hmac-sha1-96'),
+       ('SYMMETRIC','aes128-cts-hmac-sha256'),
+       ('SYMMETRIC','aes256-cts-hmac-sha512')
        /* XXX populate moar */
 ON CONFLICT DO NOTHING;
 /* Which digestypes are enabled or disabled globally */
@@ -123,11 +141,19 @@ CREATE TABLE IF NOT EXISTS heimdal.digest_types (
     CONSTRAINT hdtpk    PRIMARY KEY (ktype, dtype),
     CONSTRAINT hdtpk2   UNIQUE (dtype)
 );
-INSERT INTO heimdal.enc_types (ktype, etype)
-VALUES ('SYMMETRIC','aes128-cts-hmac-sha1-96'),
-       ('SYMMETRIC','aes256-cts-hmac-sha1-96')
+
+
+/* Duplicate inserts -L */
+/* Remedied with digest types -L */
+
+INSERT INTO heimdal.digest_types (ktype, dtype)
+VALUES ('SYMMETRIC','sha1'),
+       ('SYMMETRIC','sha256'),
+       ('SYMMETRIC','sha512')
        /* XXX populate moar */
 ON CONFLICT DO NOTHING;
+
+
 /*
  * All non-principal entities and all principals will share a namespace via
  * trigger-driven double-entry in this table.  Among other things this allows
@@ -139,9 +165,16 @@ CREATE TABLE IF NOT EXISTS heimdal.policies (
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hpolpk   PRIMARY KEY (name)
 );
+
+/* Experimental inserts -L */
+
+INSERT INTO heimdal.policies (name)
+VALUES ('default')
+ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS heimdal.entities (
     name                TEXT,
-    namespace           heimdal.namespaces NOT NULL,
+    namespace           heimdal.namespaces,
     entity_type         heimdal.entity_types NOT NULL,
     nametype            heimdal.kerberos_name_type
                         DEFAULT ('UNKNOWN'),
@@ -154,13 +187,40 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
     CONSTRAINT hepk2    UNIQUE (id),
     CONSTRAINT hefkp    FOREIGN KEY (policy)
                         REFERENCES heimdal.policies (name)
-                        ON DELETE CASCADE
+                        ON DELETE CASCADE /* XXX SET NULL or block */
                         ON UPDATE CASCADE,
     CONSTRAINT hefkc    FOREIGN KEY (canon_name, canon_namespace)
                         REFERENCES heimdal.entities (name, namespace)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
+
+/* Experimental inserts -L */
+
+INSERT INTO heimdal.entities (name, namespace, entity_type)
+VALUES ('u0@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u1@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u2@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u3@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u4@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u5@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u6@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u7@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u8@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u9@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u10@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u11@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u12@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u13@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u14@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('u15@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
+       ('g0', 'GROUP', 'GROUP'),
+       ('g1', 'GROUP', 'GROUP'),
+       ('g2', 'GROUP', 'GROUP'),
+       ('g3', 'GROUP', 'GROUP'),
+       ('g4', 'GROUP', 'GROUP')
+ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS heimdal.principal_data (
     name                TEXT,
     namespace           heimdal.namespaces
@@ -174,14 +234,36 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_data (
     last_pw_change      TIMESTAMP WITHOUT TIME ZONE,
     max_life            INTERVAL,
     max_renew           INTERVAL,
-    password            TEXT, /* very much optional, mostly unused */
+    password            TEXT, /* very much optional, mostly unused XXX make binary, encrypted */
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hppk     PRIMARY KEY (name, namespace),
+    CONSTRAINT hppk     PRIMARY KEY (name, namespace), /* Is namespace really necessary here if namespace is guaranteed to be 'PRINCIPAL'? -L */
     CONSTRAINT hpfka    FOREIGN KEY (name, namespace)
                         REFERENCES heimdal.entities (name, namespace)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
+
+/* Experimental insets -L */
+
+INSERT INTO heimdal.principal_data (name, password)
+VALUES ('u0@FOO.EXAMPLE', 'password-00'),
+       ('u1@FOO.EXAMPLE', 'password-01'),
+       ('u2@FOO.EXAMPLE', 'password-02'),
+       ('u3@FOO.EXAMPLE', 'password-03'),
+       ('u4@FOO.EXAMPLE', 'password-04'),
+       ('u5@FOO.EXAMPLE', 'password-05'),
+       ('u6@FOO.EXAMPLE', 'password-06'),
+       ('u7@FOO.EXAMPLE', 'password-07'),
+       ('u8@FOO.EXAMPLE', 'password-08'),
+       ('u9@FOO.EXAMPLE', 'password-09'),
+       ('u10@FOO.EXAMPLE', 'password-09'),
+       ('u11@FOO.EXAMPLE', 'password-10'),
+       ('u12@FOO.EXAMPLE', 'password-11'),
+       ('u13@FOO.EXAMPLE', 'password-12'),
+       ('u14@FOO.EXAMPLE', 'password-13'),
+       ('u15@FOO.EXAMPLE', 'password-14')
+ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS heimdal.principal_etypes(
     name                TEXT,
     namespace           heimdal.namespaces
@@ -189,12 +271,39 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_etypes(
                         CHECK (namespace = 'PRINCIPAL'),
     etype               heimdal.enc_type NOT NULL,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hpepk    PRIMARY KEY (name, namespace, etype),
+    CONSTRAINT hpepk    PRIMARY KEY (name, namespace, etype), /* Again, is namespace necessary? -L */
     CONSTRAINT hpefk    FOREIGN KEY (name, namespace)
                         REFERENCES heimdal.entities (name, namespace)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
+
+/* Experimental insets -L */
+
+INSERT INTO heimdal.principal_etypes (name, etype)
+VALUES ('u0@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('u1@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('u2@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('u3@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('u4@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('u5@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('u6@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('u7@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('u8@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
+       ('u9@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
+       ('u10@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
+       ('u11@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
+       ('u12@FOO.EXAMPLE', 'aes256-cts-hmac-sha512'),
+       ('u13@FOO.EXAMPLE', 'aes256-cts-hmac-sha512'),
+       ('u14@FOO.EXAMPLE', 'aes256-cts-hmac-sha512'),
+       ('u15@FOO.EXAMPLE', 'aes256-cts-hmac-sha512')
+ON CONFLICT DO NOTHING;
+
+/*
+ * Let's have some consistency here. If enc_type and digest_type are both types contained in tables enc_typeS and digest_typeS
+ * then the table principal_flags should contain the type principal_flag, NOT princ_flags. -L
+ */
+
 CREATE TABLE IF NOT EXISTS heimdal.principal_flags(
     name                TEXT,
     namespace           heimdal.namespaces
@@ -208,6 +317,28 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_flags(
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
+
+/* Experimental insets -L */
+
+INSERT INTO heimdal.principal_flags (name, flag)
+VALUES ('u0@FOO.EXAMPLE', 'CLIENT'),
+       ('u1@FOO.EXAMPLE', 'CLIENT'),
+       ('u2@FOO.EXAMPLE', 'CLIENT'),
+       ('u3@FOO.EXAMPLE', 'CLIENT'),
+       ('u4@FOO.EXAMPLE', 'CLIENT'),
+       ('u5@FOO.EXAMPLE', 'CLIENT'),
+       ('u6@FOO.EXAMPLE', 'CLIENT'),
+       ('u7@FOO.EXAMPLE', 'CLIENT'),
+       ('u8@FOO.EXAMPLE', 'CLIENT'),
+       ('u9@FOO.EXAMPLE', 'CLIENT'),
+       ('u10@FOO.EXAMPLE', 'CLIENT'),
+       ('u11@FOO.EXAMPLE', 'CLIENT'),
+       ('u12@FOO.EXAMPLE', 'CLIENT'),
+       ('u13@FOO.EXAMPLE', 'CLIENT'),
+       ('u14@FOO.EXAMPLE', 'CLIENT'),
+       ('u15@FOO.EXAMPLE', 'CLIENT')
+ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS heimdal.members (
     container_name      TEXT,
     container_namespace heimdal.namespaces,
@@ -224,6 +355,27 @@ CREATE TABLE IF NOT EXISTS heimdal.members (
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
+
+/* Experimental inserts -L */
+
+INSERT INTO heimdal.members (container_name, container_namespace, member_name, member_namespace)
+VALUES ('g0', 'GROUP', 'u0@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g0', 'GROUP', 'u1@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g0', 'GROUP', 'u2@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g0', 'GROUP', 'u3@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g1', 'GROUP', 'u1@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g1', 'GROUP', 'u6@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g1', 'GROUP', 'u7@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g1', 'GROUP', 'u8@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g2', 'GROUP', 'u4@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g2', 'GROUP', 'u5@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g2', 'GROUP', 'u9@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g3', 'GROUP', 'u11@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g3', 'GROUP', 'u12@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g4', 'GROUP', 'u14@FOO.EXAMPLE', 'PRINCIPAL'),
+       ('g4', 'GROUP', 'u15@FOO.EXAMPLE', 'PRINCIPAL')
+ON CONFLICT DO NOTHING;
+
 CREATE TYPE heimdal.salt AS (
     salttype            BIGINT,
     value               BYTEA,
@@ -242,6 +394,7 @@ CREATE TABLE IF NOT EXISTS heimdal.keys (
     enabled             BOOLEAN DEFAULT (TRUE),
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hkpk     PRIMARY KEY (name, namespace, ktype, etype, kvno, enabled),
+    /* You can have two rows in keys that are identical except with enabled true in one and false in another? I'm not sure that's intentional. -L */
     CONSTRAINT hkfk1    FOREIGN KEY (name, namespace)
                         REFERENCES heimdal.entities (name, namespace)
                         ON DELETE CASCADE
@@ -251,6 +404,32 @@ CREATE TABLE IF NOT EXISTS heimdal.keys (
                         ON DELETE RESTRICT
                         ON UPDATE CASCADE
 );
+
+/* Experimental insets -L */
+
+INSERT INTO heimdal.keys (name, namespace, kvno, ktype, etype, key)
+VALUES ('u0@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0000'),
+       ('u0@FOO.EXAMPLE', 'PRINCIPAL', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0100'),
+       ('u1@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0001'),
+       ('u2@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0002'),
+       ('u3@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0003'),
+       ('u4@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0004'),
+       ('u5@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0005'),
+       ('u6@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0006'),
+       ('u7@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0007'),
+       ('u8@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0008'),
+       ('u9@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0009'),
+       ('u10@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0010'),
+       ('u11@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0011'),
+       ('u12@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0012'),
+       ('u13@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0013'),
+       ('u14@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0014'),
+       ('u15@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0015')
+ON CONFLICT DO NOTHING;
+
+UPDATE heimdal.principal_data SET kvno = 2
+WHERE name = 'u0@FOO.EXAMPLE';
+
 CREATE TABLE IF NOT EXISTS heimdal.password_history (
     name                TEXT,
     namespace           heimdal.namespaces
@@ -258,7 +437,7 @@ CREATE TABLE IF NOT EXISTS heimdal.password_history (
                         CHECK (namespace = 'PRINCIPAL'),
     etype               heimdal.enc_type,
     /* XXX Should be MAC, not digest */
-    digest_alg          heimdal.digest_type,
+    digest_alg          heimdal.digest_type, /* why not just dtype like table digest_types? -L */
     digest              BYTEA,
     kvno                BIGINT,
     mkvno               BIGINT,
@@ -334,6 +513,10 @@ SELECT m.name AS name, m.namespace AS namespace,
 FROM hdb.modified_info_raw r
 JOIN hdb.modified_info_max m USING(name, namespace, modified_at)
 GROUP BY m.name, m.namespace, m.modified_at ;
+/* This makes no sense to me.
+ * How can you max aggregate a text?
+ Even if you can, how is it useful when you only have one row for every name-namespace pair? -L
+ */
 
 CREATE OR REPLACE VIEW hdb.key AS
 SELECT
@@ -352,15 +535,13 @@ SELECT k.name AS name, k.kvno AS kvno,
                                    'key',ks.key)) AS keys
 FROM heimdal.keys k
 JOIN hdb.key ks USING (name, kvno)
-WHERE NOT EXISTS (SELECT 1
-                  FROM heimdal.principal_data p
-                  WHERE p.name = k.name AND p.kvno = k.kvno)
 GROUP BY k.name, k.kvno;
 
 CREATE OR REPLACE VIEW hdb.keysets AS
 SELECT ks.name AS name, 'keysets' AS extname,
        jsonb_agg(ks.keys) AS ext
 FROM hdb.keyset ks
+WHERE NOT EXISTS (SELECT 1 FROM heimdal.principal_data p WHERE p.name = ks.name AND p.kvno = ks.kvno)
 GROUP BY ks.name;
 
 CREATE OR REPLACE VIEW hdb.aliases AS
@@ -438,6 +619,7 @@ SELECT e.name AS name,
             'modified-at',modinfo.modified_at::text,
             'valid-start',p.valid_start::text,
             'valid-end',p.valid_end::text,
+            'pw-life',p.pw_life::text,
             'pw-end',p.pw_end::text,
             'last-pw-change',p.last_pw_change::text,
             'max-life',coalesce(p.max_life::text,''),
@@ -515,23 +697,30 @@ BEGIN
         /* Add a principal */
         INSERT INTO heimdal.entities
             (name, namespace, entity_type, nametype, policy)
-        SELECT (NEW.entry)->'name', 'PRINCIPAL', 'UNKNOWN-PRINCIPAL-TYPE',
-               (NEW.entry)->'name-type', (NEW.entry)->'policy';
+        SELECT (NEW.entry)->>'name', 'PRINCIPAL', 'UNKNOWN-PRINCIPAL-TYPE',
+               ((NEW.entry)->>'name-type'::text)::heimdal.kerberos_name_type, (NEW.entry)->'policy';
         INSERT INTO heimdal.principal_data
             (name, namespace, kvno, pw_life, pw_end, max_life,
              max_renew, password)
-        SELECT (NEW.entry)->'name', 'PRINCIPAL', (NEW.entry)->'kvno',
-               (NEW.entry)->'pw_life', (NEW.entry)->'pw_end',
-               (NEW.entry)->'max_life', (NEW.entry)->'max_renew',
-               (NEW.entry)->'password';
-        INSERT INTO hdb.keyset (name, exts)
-        SELECT name, (NEW.entry)->'kvno', (NEW.entry)->'keys';
+        SELECT (NEW.entry)->>'name', 'PRINCIPAL', ((NEW.entry)->'kvno')::text::bigint,
+               ((NEW.entry)->>'pw-life'::text)::interval, ((NEW.entry)->>'pw-end'::text)::timestamp without time zone,
+               coalesce(((NEW.entry)->>'max-life'::text)::interval), coalesce(((NEW.entry)->>'max-renew'::text)::interval),
+               (NEW.entry)->>'password';
+
+        /*
+         * XXX Also insert into heimdal.principal_flags!
+         *
+         * Disable until the INSTEAD OF triggers for these views are created:
+         *
+        INSERT INTO hdb.keyset (name, kvno, keys)
+        SELECT NEW.name, ((NEW.entry)->'kvno')::text::bigint, (NEW.entry)->'keys';
         INSERT INTO hdb.exts (name, exts)
         SELECT name, (NEW.entry)->'extensions';
+         */
         RETURN NEW;
     END IF;
 
-    /* Update a principal or alias */
+    /* UPDATE a principal or alias */
 
     /* Get the list of fields to update */
     fields := coalesce((NEW.entry)->'kadm5_fields',
@@ -557,12 +746,12 @@ BEGIN
                          "password":true,
                          "pkinit":true,
                          "aliases":true
-                        }'::jsonb);
+                        }'::json);
     IF OLD.name IS NULL THEN
         OLD.name := NEW.name;
     END IF;
 
-    IF coalesce(fields->'name', TRUE) AND
+    IF fields->'name' IS NULL AND
        (OLD.entry)->'canon_name' IS NOT NULL AND
        (NEW.entry)->'canon_name' IS NOT NULL THEN
         /* Update (move) an alias */
@@ -575,7 +764,7 @@ BEGIN
         RETURN NEW; /* Nothing else to do */
     END IF;
 
-    IF coalesce(fields->'name', TRUE) AND
+    IF fields->'name' IS NULL AND
        ((OLD.entry)->'canon_name' IS NOT NULL OR
         (NEW.entry)->'canon_name' IS NOT NULL) THEN
         /*
