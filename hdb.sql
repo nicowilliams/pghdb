@@ -232,8 +232,8 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_data (
     pw_end              TIMESTAMP WITHOUT TIME ZONE
                         DEFAULT (current_timestamp + '90 days'::interval),
     last_pw_change      TIMESTAMP WITHOUT TIME ZONE,
-    max_life            INTERVAL,
-    max_renew           INTERVAL,
+    max_life            INTERVAL DEFAULT ('10 hours'::interval),
+    max_renew           INTERVAL DEFAUlT ('7 days'::interval),
     password            TEXT, /* very much optional, mostly unused XXX make binary, encrypted */
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hppk     PRIMARY KEY (name, namespace), /* Is namespace really necessary here if namespace is guaranteed to be 'PRINCIPAL'? -L */
@@ -388,7 +388,7 @@ CREATE TABLE IF NOT EXISTS heimdal.keys (
     ktype               heimdal.key_type,
     etype               heimdal.enc_type, /* varies according to heimdal.key_type */
     key                 BYTEA,
-    salt                heimdal.salt[],
+    salt                heimdal.salt,
     mkvno               BIGINT,
     /* keys can be disabled separately from enc_types */
     enabled             BOOLEAN DEFAULT (TRUE),
@@ -523,6 +523,8 @@ SELECT
     k.name AS name, k.kvno AS kvno,
     jsonb_build_object('ktype',k.ktype::text,
                        'etype',k.etype::text,
+                       'kvno',k.kvno::bigint,
+                       'mkvno',k.mkvno::bigint,
                        'salt',k.salt::text,
                        'key',k.key::text) AS key
 FROM heimdal.keys k
@@ -530,9 +532,7 @@ WHERE k.enabled AND k.valid_start <= current_timestamp AND
       k.valid_end > current_timestamp;
 
 CREATE OR REPLACE VIEW hdb.keyset AS
-SELECT k.name AS name, k.kvno AS kvno,
-       jsonb_agg(jsonb_build_object('kvno',k.kvno,
-                                   'key',ks.key)) AS keys
+SELECT k.name AS name, k.kvno AS kvno, jsonb_agg(ks.key) AS keys
 FROM heimdal.keys k
 JOIN hdb.key ks USING (name, kvno)
 GROUP BY k.name, k.kvno;
@@ -654,6 +654,26 @@ WHERE a.namespace = 'PRINCIPAL' AND
 
 /* XXX Add INSTEAD OF triggers on HDB views */
 
+CREATE OR REPLACE FUNCTION hdb.instead_of_on_keyset_func()
+RETURNS TRIGGER AS $$
+DECLARE
+    fields JSONB;
+BEGIN
+    INSERT INTO heimdal.keys
+        (name, namespace, kvno, ktype, etype, key, salt, mkvno)
+    SELECT NEW.name, 'PRINCIPAL', (k->>'kvno'::text)::bigint, (k->>'ktype'::text)::heimdal.key_type,
+                                (k->>'etype'::text)::heimdal.enc_type, (k->>'key'::text)::bytea,
+                                (k->>'salt'::text)::heimdal.salt, (k->>'mkvno'::text)::bigint
+    FROM jsonb_array_elements(NEW.keys) k;
+    RETURN NEW;
+END; $$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER instead_of_on_hdb_keyset
+INSTEAD OF INSERT
+ON hdb.keyset
+FOR EACH ROW
+EXECUTE FUNCTION hdb.instead_of_on_keyset_func();
+
 CREATE OR REPLACE FUNCTION hdb.instead_of_on_hdb_func()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -706,17 +726,18 @@ BEGIN
                ((NEW.entry)->>'pw-life'::text)::interval, ((NEW.entry)->>'pw-end'::text)::timestamp without time zone,
                coalesce(((NEW.entry)->>'max-life'::text)::interval), coalesce(((NEW.entry)->>'max-renew'::text)::interval),
                (NEW.entry)->>'password';
-
+        INSERT INTO heimdal.principal_flags
+            (name, namespace, flag)
+        SELECT (NEW.entry)->>'name', 'PRINCIPAL', (flag::text)::heimdal.princ_flags
+        FROM json_array_elements_text((NEW.entry)->'flags') f(flag);
         /*
-         * XXX Also insert into heimdal.principal_flags!
-         *
          * Disable until the INSTEAD OF triggers for these views are created:
          *
-        INSERT INTO hdb.keyset (name, kvno, keys)
-        SELECT NEW.name, ((NEW.entry)->'kvno')::text::bigint, (NEW.entry)->'keys';
         INSERT INTO hdb.exts (name, exts)
         SELECT name, (NEW.entry)->'extensions';
          */
+        INSERT INTO hdb.keyset (name, kvno, keys)
+        SELECT (NEW.entry)->>'name', ((NEW.entry)->'kvno')::text::bigint, (NEW.entry)->'keys';
         RETURN NEW;
     END IF;
 
