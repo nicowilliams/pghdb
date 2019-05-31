@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
     name                TEXT,
     namespace           heimdal.namespaces,
     entity_type         heimdal.entity_types NOT NULL,
-    nametype            heimdal.kerberos_name_type
+    name_type            heimdal.kerberos_name_type
                         DEFAULT ('UNKNOWN'),
     canon_name          TEXT,
     canon_namespace     heimdal.namespaces,
@@ -454,7 +454,7 @@ CREATE TABLE IF NOT EXISTS heimdal.password_history (
 );
 CREATE TYPE heimdal.pkix_name AS (
     display             TEXT,   /* display form of name */
-    nametype            heimdal.pkix_name_type,
+    name_type            heimdal.pkix_name_type,
     name                BYTEA
 );
 CREATE TABLE IF NOT EXISTS heimdal.pkinit_cert_names (
@@ -556,7 +556,7 @@ SELECT p.name AS name,
                           'mkvno',p.mkvno,
                           'etype',p.etype::text,
                           'digest_alg',p.digest_alg::text,
-                          'digest',p.digest::text) AS old_password
+                          'digest',encode(p.digest, 'base64')) AS old_password
 FROM heimdal.password_history p;
 
 CREATE OR REPLACE VIEW hdb.pwh AS
@@ -610,9 +610,10 @@ CREATE OR REPLACE VIEW hdb.hdb AS
 SELECT e.name AS name,
        json_build_object(
             'name',e.name,
+            'canon-name',e.canon_name,
             'kvno',p.kvno,
             'keys',keys.keys,
-            'name-type',e.nametype,
+            'name-type',e.name_type,
             'created-by',e.created_by,
             'created-at',e.created_at::text,
             'modified-by',modinfo.modified_by,
@@ -674,6 +675,135 @@ ON hdb.keyset
 FOR EACH ROW
 EXECUTE FUNCTION hdb.instead_of_on_keyset_func();
 
+CREATE OR REPLACE FUNCTION hdb.instead_of_on_exts_func()
+RETURNS TRIGGER AS $$
+DECLARE
+    fields JSONB;
+BEGIN
+    /* Same pattern for all extensions */
+
+    INSERT INTO hdb.aliases
+        (name, ext)
+    SELECT NEW.name, e->'ext'
+    FROM jsonb_array_elements(NEW.exts) e
+    WHERE (e->>'exttype'::text) = 'aliases';
+
+    INSERT INTO hdb.keysets
+        (name, ext)
+    SELECT NEW.name, e->'ext'
+    FROM jsonb_array_elements(NEW.exts) e
+    WHERE (e->>'exttype'::text) = 'keysets';
+
+    INSERT INTO hdb.pwh
+        (name, ext)
+    SELECT NEW.name, e->'ext'
+    FROM jsonb_array_elements(NEW.exts) e
+    WHERE (e->>'exttype'::text) = 'password_history';
+
+    RETURN NEW;
+END; $$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER instead_of_on_hdb_exts
+INSTEAD OF INSERT
+ON hdb.exts
+FOR EACH ROW
+EXECUTE FUNCTION hdb.instead_of_on_exts_func();
+
+CREATE OR REPLACE FUNCTION hdb.instead_of_on_aliases_func()
+RETURNS TRIGGER AS $$
+DECLARE
+    fields JSONB;
+BEGIN
+    IF NEW.extname <> 'aliases' OR OLD.extname <> 'aliases' THEN
+        RETURN NULL; /* XXX Raise instead! */
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        /* Delete aliases that existed but don't appear in 'ext' -- they're getting dropped*/
+        WITH aliases AS (
+            -- New aliases
+            SELECT a.alias AS alias FROM jsonb_array_elements_text(NEW.ext) a(alias))
+        DELETE FROM heimdal.entities AS e
+        WHERE canon_name = NEW.name AND namespace = 'PRINCIPAL' AND
+              -- Delete existing aliases that are not in the new alias list
+              NOT EXISTS (SELECT 1 FROM aliases a WHERE a.alias = e.name);
+    END IF;
+
+    /* Insert any [new] aliases */
+    INSERT INTO heimdal.entities
+        (name, namespace, canon_name, canon_namespace,
+         entity_type, name_type, valid_start, valid_end)
+    SELECT a.name, 'PRINCIPAL', NEW.name, 'PRINCIPAL',
+           p.entity_type, p.name_type, p.valid_start, p.valid_end
+    FROM jsonb_array_elements_text(NEW.ext) AS a(name)
+    CROSS JOIN (
+        /* Get the columns of the canonical name that we have to copy */
+        SELECT entity_type, name_type, valid_start, valid_end
+        FROM heimdal.entities
+        WHERE name = NEW.name AND namespace = 'PRINCIPAL') p
+    WHERE NOT EXISTS (
+        /* But don't re-add aliases that already exist for this principal */
+        SELECT 1
+        FROM heimdal.entities e
+        WHERE e.name = a.name AND namespace = 'PRINCIPAL' AND
+              e.canon_name = NEW.name AND e.canon_namespace = 'PRINCIPAL');
+    RETURN NEW;
+END; $$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER instead_of_on_hdb_aliases
+INSTEAD OF INSERT OR UPDATE
+ON hdb.aliases
+FOR EACH ROW
+EXECUTE FUNCTION hdb.instead_of_on_aliases_func();
+
+CREATE OR REPLACE FUNCTION hdb.instead_of_on_pwh_func()
+RETURNS TRIGGER AS $$
+DECLARE
+    fields JSONB;
+BEGIN
+    IF NEW.extname <> 'password_history' OR OLD.extname <> 'password_history' THEN
+        RETURN NULL; /* XXX Raise instead! */
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        /* Delete pwh entries that existed but don't appear in 'ext' -- they're getting dropped*/
+        WITH pwh_entries AS (
+            -- New pwh entries
+            SELECT p.entry AS entry FROM jsonb_array_elements_text(NEW.ext) p(entry))
+        DELETE FROM heimdal.password_history AS p
+        WHERE name = NEW.name AND namespace = 'PRINCIPAL' AND
+              -- Delete existing aliases that are not in the new alias list
+              NOT EXISTS (
+                    SELECT 1
+                    FROM pwh_entries e
+                    WHERE e.name = p.name AND p.canon_name = 'PRINCIPAL' AND
+                          decode(e.entry->>'digest'::text, 'base64') = p.digest);
+    END IF;
+
+    /* Insert any [new] password history entries */
+    INSERT INTO heimdal.password_history
+        (name, namespace, etype, digest_alg, digest, kvno, mkvno)
+    SELECT a.name, 'PRINCIPAL', (e.entry)->'etype'::text::heimdal.enc_type,
+           (e.entry)->'digest_alg'::text::heimdal.digest_type,
+           decode(e.entry->>'digest'::text, 'base64'),
+           (e.entry)->'kvno'::bigint,
+           (e.entry)->'mkvno'::bigint
+    FROM jsonb_array_elements(NEW.ext) AS e(entry)
+    WHERE NOT EXISTS (
+        /* But don't re-add password history entries that already exist for this principal */
+        SELECT 1
+        FROM heimdal.password_history e
+        WHERE e.name = a.name AND namespace = 'PRINCIPAL' AND
+              decode((NEW.entry)->>'digest'::text, 'base64') = e.digest);
+    RETURN NEW;
+END; $$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER instead_of_on_hdb_pwh
+INSTEAD OF INSERT OR UPDATE
+ON hdb.pwh
+FOR EACH ROW
+EXECUTE FUNCTION hdb.instead_of_on_pwh_func();
+
 CREATE OR REPLACE FUNCTION hdb.instead_of_on_hdb_func()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -706,19 +836,13 @@ BEGIN
     NEW.name := (NEW.entry)->'name';
 
     IF TG_OP = 'INSERT' THEN
-        IF (NEW.entry)->'canon_name' IS NOT NULL THEN
-            /* Add an alias */
-            INSERT INTO heimdal.entities
-                (name, namespace, entity_type, canon_name, canon_namespace)
-            SELECT (NEW.entry)->'name', 'PRINCIPAL', 'UNKNOWN-PRINCIPAL-TYPE',
-                   (NEW.entry)->'canon_name', 'PRINCIPAL';
-            RETURN NEW;
-        END IF;
-        /* Add a principal */
+        /* Add the principal's base entity */
         INSERT INTO heimdal.entities
-            (name, namespace, entity_type, nametype, policy)
+            (name, namespace, entity_type, name_type, policy)
         SELECT (NEW.entry)->>'name', 'PRINCIPAL', 'UNKNOWN-PRINCIPAL-TYPE',
                ((NEW.entry)->>'name-type'::text)::heimdal.kerberos_name_type, (NEW.entry)->'policy';
+
+        /* Add the principal */
         INSERT INTO heimdal.principal_data
             (name, namespace, kvno, pw_life, pw_end, max_life,
              max_renew, password)
@@ -726,22 +850,26 @@ BEGIN
                ((NEW.entry)->>'pw-life'::text)::interval, ((NEW.entry)->>'pw-end'::text)::timestamp without time zone,
                coalesce(((NEW.entry)->>'max-life'::text)::interval), coalesce(((NEW.entry)->>'max-renew'::text)::interval),
                (NEW.entry)->>'password';
+
+        /* Add its normalized flags */
         INSERT INTO heimdal.principal_flags
             (name, namespace, flag)
         SELECT (NEW.entry)->>'name', 'PRINCIPAL', (flag::text)::heimdal.princ_flags
         FROM json_array_elements_text((NEW.entry)->'flags') f(flag);
-        /*
-         * Disable until the INSTEAD OF triggers for these views are created:
-         *
+
+        /* Insert current keyset indirectly via INSTEAD OF INSERT TRIGGER on hdb.keyset */
+        INSERT INTO hdb.keyset (name, keys)
+        SELECT (NEW.entry)->>'name', (NEW.entry)->'keys';
+
+        /* Insert extensions indirectly via INSTEAD OF INSERT TRIGGER on hdb.exts */
         INSERT INTO hdb.exts (name, exts)
-        SELECT name, (NEW.entry)->'extensions';
-         */
-        INSERT INTO hdb.keyset (name, kvno, keys)
-        SELECT (NEW.entry)->>'name', ((NEW.entry)->'kvno')::text::bigint, (NEW.entry)->'keys';
+        SELECT (NEW.entry)->>'name', (NEW.entry)->'extensions';
         RETURN NEW;
     END IF;
 
     /* UPDATE a principal or alias */
+
+    /* Update extensions indirectly via INSTEAD OF UPDATE TRIGGER on hdb.exts */
 
     /* Get the list of fields to update */
     fields := coalesce((NEW.entry)->'kadm5_fields',
@@ -800,32 +928,32 @@ BEGIN
     /* Update a principal */
 
     /* First update everything but the name */
-    IF coalesce(fields->'principal_expire_time', FALSE) THEN
+    IF fields->'principal_expire_time' IS NOT NULL THEN
         UPDATE heimdal.principal_data
         SET valid_end = (NEW.entry)->'valid-end'::timestamp without time zone
         WHERE name = OLD.name;
     END IF;
-    IF coalesce(fields->'pw_expiration', FALSE) THEN
+    IF fields->'pw_expiration' IS NOT NULL THEN
         UPDATE heimdal.principal_data
         SET valid_end = (NEW.entry)->'pw-end'::timestamp without time zone
         WHERE name = OLD.name AND namespace = 'PRINCIPAL';
     END IF;
-    IF coalesce(fields->'last_pwd_change', FALSE) THEN
+    IF fields->'last_pwd_change' IS NOT NULL THEN
         UPDATE heimdal.principal_data
         SET last_pw_change = (NEW.entry)->'last-pw-change'::timestamp without time zone
         WHERE name = OLD.name AND namespace = 'PRINCIPAL';
     END IF;
-    IF coalesce(fields->'max_life', FALSE) THEN
+    IF fields->'max_life' IS NOT NULL THEN
         UPDATE heimdal.principal_data
         SET last_pw_change = (NEW.entry)->'max-life'::interval
         WHERE name = OLD.name AND namespace = 'PRINCIPAL';
     END IF;
-    IF coalesce(fields->'max_renew', FALSE) THEN
+    IF fields->'max_renew' IS NOT NULL THEN
         UPDATE heimdal.principal_data
         SET last_pw_change = (NEW.entry)->'max-renew'::interval
         WHERE name = OLD.name AND namespace = 'PRINCIPAL';
     END IF;
-    IF coalesce(fields->'attributes', FALSE) THEN
+    IF fields->'attributes' IS NOT NULL THEN
         DELETE FROM heimdal.principal_flags AS pf
         WHERE pf.name = OLD.name AND namespace = 'PRINCIPAL' AND
               (NEW.entry)@>(json_build_array(pf.flag));
@@ -833,7 +961,7 @@ BEGIN
             (name, namespace, flag)
         SELECT OLD.name, 'PRINCIPAL', jsonb_array_elements((NEW.entry)->'flags');
     END IF;
-    IF coalesce(fields->'etypes', FALSE) THEN
+    IF fields->'etypes' IS NOT NULL THEN
         DELETE FROM heimdal.principal_etypes AS pe
         WHERE pe.name = OLD.name AND namespace = 'PRINCIPAL' AND
               (NEW.entry)@>(json_build_array(pe.etype));
@@ -841,7 +969,7 @@ BEGIN
             (name, namespace, etype)
         SELECT OLD.name, 'PRINCIPAL', jsonb_array_elements((NEW.entry)->'etypes');
     END IF;
-    IF coalesce(fields->'keydata', FALSE) THEN
+    IF fields->'keydata' IS NOT NULL THEN
         /* XXX Delete old keys too! */
         /*
          * hdb.key's INSTEAD OF INSERT trigger will not update key values when
