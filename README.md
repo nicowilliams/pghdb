@@ -30,9 +30,12 @@ The idea here is to normalize the HDB schema and use PostgreSQL +
 PostgREST while keeping backwards compatibility with the existing HDB
 for KDC performance reasons.
 
+Backwards-compatibility entails denormalizing views and triggers on them so
+that we can have a bridge from the past into the future.
+
 Current plan:
 
- - Derive a highly normalized PG SQL schema from the hdb_entry type from
+ - Derive a highly normalized PG SQL schema from the `hdb_entry` type from
    lib/hdb/hdb.asn1, call this schema "heimdal".
 
  - Add to "heimdal" schema for representing group memberships and other
