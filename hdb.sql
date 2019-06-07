@@ -1,4 +1,4 @@
-SET client_min_messages TO 'debug';
+-- SET client_min_messages TO 'debug';
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 /*
@@ -189,32 +189,6 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
                         ON UPDATE CASCADE
 );
 
-/* Experimental inserts -L */
-
-INSERT INTO heimdal.entities (name, namespace, entity_type)
-VALUES ('u0@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u1@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u2@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u3@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u4@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u5@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u6@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u7@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u8@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u9@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u10@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u11@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u12@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u13@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u14@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('u15@FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
-       ('g0', 'GROUP', 'GROUP'),
-       ('g1', 'GROUP', 'GROUP'),
-       ('g2', 'GROUP', 'GROUP'),
-       ('g3', 'GROUP', 'GROUP'),
-       ('g4', 'GROUP', 'GROUP')
-ON CONFLICT DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS heimdal.principals (
     name                TEXT,
     namespace           heimdal.namespaces
@@ -231,33 +205,12 @@ CREATE TABLE IF NOT EXISTS heimdal.principals (
     max_renew           INTERVAL DEFAUlT ('7 days'::interval),
     password            TEXT, /* very much optional, mostly unused XXX make binary, encrypted */
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hppk     PRIMARY KEY (name, namespace), /* Is namespace really necessary here if namespace is guaranteed to be 'PRINCIPAL'? -L */
+    CONSTRAINT hppk     PRIMARY KEY (name, namespace),
     CONSTRAINT hpfka    FOREIGN KEY (name, namespace)
                         REFERENCES heimdal.entities (name, namespace)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
-
-/* Experimental insets -L */
-
-INSERT INTO heimdal.principals (name, password)
-VALUES ('u0@FOO.EXAMPLE', 'password-00'),
-       ('u1@FOO.EXAMPLE', 'password-01'),
-       ('u2@FOO.EXAMPLE', 'password-02'),
-       ('u3@FOO.EXAMPLE', 'password-03'),
-       ('u4@FOO.EXAMPLE', 'password-04'),
-       ('u5@FOO.EXAMPLE', 'password-05'),
-       ('u6@FOO.EXAMPLE', 'password-06'),
-       ('u7@FOO.EXAMPLE', 'password-07'),
-       ('u8@FOO.EXAMPLE', 'password-08'),
-       ('u9@FOO.EXAMPLE', 'password-09'),
-       ('u10@FOO.EXAMPLE', 'password-09'),
-       ('u11@FOO.EXAMPLE', 'password-10'),
-       ('u12@FOO.EXAMPLE', 'password-11'),
-       ('u13@FOO.EXAMPLE', 'password-12'),
-       ('u14@FOO.EXAMPLE', 'password-13'),
-       ('u15@FOO.EXAMPLE', 'password-14')
-ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS heimdal.principal_etypes(
     name                TEXT,
@@ -266,33 +219,12 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_etypes(
                         CHECK (namespace = 'PRINCIPAL'),
     etype               heimdal.enc_type NOT NULL,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hpepk    PRIMARY KEY (name, namespace, etype), /* Again, is namespace necessary? -L */
+    CONSTRAINT hpepk    PRIMARY KEY (name, namespace, etype),
     CONSTRAINT hpefk    FOREIGN KEY (name, namespace)
                         REFERENCES heimdal.entities (name, namespace)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
-
-/* Experimental insets -L */
-
-INSERT INTO heimdal.principal_etypes (name, etype)
-VALUES ('u0@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
-       ('u1@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
-       ('u2@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
-       ('u3@FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
-       ('u4@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
-       ('u5@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
-       ('u6@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
-       ('u7@FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
-       ('u8@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
-       ('u9@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
-       ('u10@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
-       ('u11@FOO.EXAMPLE', 'aes128-cts-hmac-sha256'),
-       ('u12@FOO.EXAMPLE', 'aes256-cts-hmac-sha512'),
-       ('u13@FOO.EXAMPLE', 'aes256-cts-hmac-sha512'),
-       ('u14@FOO.EXAMPLE', 'aes256-cts-hmac-sha512'),
-       ('u15@FOO.EXAMPLE', 'aes256-cts-hmac-sha512')
-ON CONFLICT DO NOTHING;
 
 /*
  * Let's have some consistency here. If enc_type and digest_type are both types contained in tables enc_typeS and digest_typeS
@@ -313,27 +245,6 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_flags(
                         ON UPDATE CASCADE
 );
 
-/* Experimental insets -L */
-
-INSERT INTO heimdal.principal_flags (name, flag)
-VALUES ('u0@FOO.EXAMPLE', 'CLIENT'),
-       ('u1@FOO.EXAMPLE', 'CLIENT'),
-       ('u2@FOO.EXAMPLE', 'CLIENT'),
-       ('u3@FOO.EXAMPLE', 'CLIENT'),
-       ('u4@FOO.EXAMPLE', 'CLIENT'),
-       ('u5@FOO.EXAMPLE', 'CLIENT'),
-       ('u6@FOO.EXAMPLE', 'CLIENT'),
-       ('u7@FOO.EXAMPLE', 'CLIENT'),
-       ('u8@FOO.EXAMPLE', 'CLIENT'),
-       ('u9@FOO.EXAMPLE', 'CLIENT'),
-       ('u10@FOO.EXAMPLE', 'CLIENT'),
-       ('u11@FOO.EXAMPLE', 'CLIENT'),
-       ('u12@FOO.EXAMPLE', 'CLIENT'),
-       ('u13@FOO.EXAMPLE', 'CLIENT'),
-       ('u14@FOO.EXAMPLE', 'CLIENT'),
-       ('u15@FOO.EXAMPLE', 'CLIENT')
-ON CONFLICT DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS heimdal.members (
     container_name      TEXT,
     container_namespace heimdal.namespaces,
@@ -351,31 +262,12 @@ CREATE TABLE IF NOT EXISTS heimdal.members (
                         ON UPDATE CASCADE
 );
 
-/* Experimental inserts -L */
-
-INSERT INTO heimdal.members (container_name, container_namespace, member_name, member_namespace)
-VALUES ('g0', 'GROUP', 'u0@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g0', 'GROUP', 'u1@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g0', 'GROUP', 'u2@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g0', 'GROUP', 'u3@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g1', 'GROUP', 'u1@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g1', 'GROUP', 'u6@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g1', 'GROUP', 'u7@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g1', 'GROUP', 'u8@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g2', 'GROUP', 'u4@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g2', 'GROUP', 'u5@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g2', 'GROUP', 'u9@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g3', 'GROUP', 'u11@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g3', 'GROUP', 'u12@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g4', 'GROUP', 'u14@FOO.EXAMPLE', 'PRINCIPAL'),
-       ('g4', 'GROUP', 'u15@FOO.EXAMPLE', 'PRINCIPAL')
-ON CONFLICT DO NOTHING;
-
 CREATE TYPE heimdal.salt AS (
     salttype            BIGINT,
     value               BYTEA,
     opaque              BYTEA
 );
+
 CREATE TABLE IF NOT EXISTS heimdal.keys (
     name                TEXT,
     namespace           heimdal.namespaces,
@@ -388,8 +280,7 @@ CREATE TABLE IF NOT EXISTS heimdal.keys (
     /* keys can be disabled separately from enc_types */
     enabled             BOOLEAN DEFAULT (TRUE),
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hkpk     PRIMARY KEY (name, namespace, ktype, etype, kvno, enabled),
-    /* You can have two rows in keys that are identical except with enabled true in one and false in another? I'm not sure that's intentional. -L */
+    CONSTRAINT hkpk     PRIMARY KEY (name, namespace, ktype, etype, kvno),
     CONSTRAINT hkfk1    FOREIGN KEY (name, namespace)
                         REFERENCES heimdal.entities (name, namespace)
                         ON DELETE CASCADE
@@ -399,31 +290,6 @@ CREATE TABLE IF NOT EXISTS heimdal.keys (
                         ON DELETE RESTRICT
                         ON UPDATE CASCADE
 );
-
-/* Experimental insets -L */
-
-INSERT INTO heimdal.keys (name, namespace, kvno, ktype, etype, key)
-VALUES ('u0@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0000'),
-       ('u0@FOO.EXAMPLE', 'PRINCIPAL', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0100'),
-       ('u1@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0001'),
-       ('u2@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0002'),
-       ('u3@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0003'),
-       ('u4@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0004'),
-       ('u5@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0005'),
-       ('u6@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0006'),
-       ('u7@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0007'),
-       ('u8@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0008'),
-       ('u9@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0009'),
-       ('u10@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0010'),
-       ('u11@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha256', E'\\x0011'),
-       ('u12@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0012'),
-       ('u13@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0013'),
-       ('u14@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0014'),
-       ('u15@FOO.EXAMPLE', 'PRINCIPAL', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha512', E'\\x0015')
-ON CONFLICT DO NOTHING;
-
-UPDATE heimdal.principals SET kvno = 2
-WHERE name = 'u0@FOO.EXAMPLE';
 
 CREATE TABLE IF NOT EXISTS heimdal.aliases (
     name                TEXT,
@@ -468,12 +334,6 @@ CREATE TABLE IF NOT EXISTS heimdal.password_history (
                         ON UPDATE CASCADE
 );
 
-/* Experimental inserts -L */
-
-INSERT INTO heimdal.password_history (name, namespace, etype, digest, digest_alg, mkvno)
-VALUES ('u5@FOO.EXAMPLE', 'PRINCIPAL', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1)
-ON CONFLICT DO NOTHING;
-
 CREATE TYPE heimdal.pkix_name AS (
     display             TEXT,   /* display form of name */
     name_type            heimdal.pkix_name_type,
@@ -508,11 +368,6 @@ CREATE OR REPLACE VIEW hdb.modified_info AS
 SELECT name AS name, namespace AS namespace,
        modified_by AS modified_by, modified_at AS modified_at
 FROM heimdal.principals;
-
-/* This makes no sense to me.
- * How can you max aggregate a text?
- Even if you can, how is it useful when you only have one row for every name-namespace pair? -L
- */
 
 CREATE OR REPLACE VIEW hdb.key AS
 SELECT
@@ -616,6 +471,7 @@ SELECT e.name AS name,
             'created_at',e.created_at::text,
             'modified_by',modinfo.modified_by,
             'modified_at',modinfo.modified_at::text,
+            'password',p.password::text,
             'valid_start',p.valid_start::text,
             'valid_end',p.valid_end::text,
             'pw_life',p.pw_life::text,
@@ -961,10 +817,8 @@ BEGIN
         SET pw_end = (NEW.entry->>'pw_end')::timestamp without time zone
         WHERE name = NEW.name AND namespace = 'PRINCIPAL';
     END IF;
-    RAISE DEBUG 'HERE NEW.entry->>last_pw_change = %', NEW.entry->>'last_pw_change';
     IF (fields IS NULL OR fields->'last_pwd_change' IS NOT NULL) AND
         OLD.entry->>'last_pw_change' <> NEW.entry->>'last_pw_change' THEN
-        RAISE DEBUG 'FOO NEW.entry->>last_pw_change = %', NEW.entry->>'last_pw_change';
         UPDATE heimdal.principals
         SET last_pw_change = (NEW.entry->>'last_pw_change')::timestamp without time zone
         WHERE name = NEW.name AND namespace = 'PRINCIPAL';
@@ -991,18 +845,21 @@ BEGIN
               NOT EXISTS (SELECT n.name, n.flag FROM new_flags n WHERE n.name = pf.name AND n.flag = pf.flag);
         INSERT INTO heimdal.principal_flags
             (name, namespace, flag)
-        SELECT NEW.name, 'PRINCIPAL', (jsonb_array_elements_text((NEW.entry)->'flags'))::heimdal.princ_flags
+        SELECT NEW.name, 'PRINCIPAL', (jsonb_array_elements_text(NEW.entry->'flags'))::heimdal.princ_flags
         ON CONFLICT DO NOTHING;
     END IF;
     IF (fields IS NULL OR fields->'etypes' IS NOT NULL) AND
        OLD.entry->>'etypes' <> NEW.entry->>'etypes' THEN
         /* XXX FIXME */
+        WITH new_etypes AS (
+            SELECT NEW.name AS name, e.etype::heimdal.enc_type AS etype
+            FROM jsonb_array_elements_text(NEW.entry->'etypes') e(etype))
         DELETE FROM heimdal.principal_etypes AS pe
         WHERE pe.name = NEW.name AND namespace = 'PRINCIPAL' AND
-              (NEW.entry)@>(jsonb_build_array(pe.etype));
-        INSERT INTO heimdal.principal_etype
+              NOT EXISTS (SELECT n.name, n.etype FROM new_etypes n WHERE n.name = pe.name AND n.etype = pe.etype);
+        INSERT INTO heimdal.principal_etypes
             (name, namespace, etype)
-        SELECT NEW.name, 'PRINCIPAL', jsonb_array_elements((NEW.entry)->'etypes')
+        SELECT NEW.name, 'PRINCIPAL', (jsonb_array_elements_text(NEW.entry->'etypes'))::heimdal.enc_type
         ON CONFLICT DO NOTHING;
     END IF;
     IF (fields IS NULL OR fields->'keydata' IS NOT NULL) AND
@@ -1012,27 +869,42 @@ BEGIN
          * hdb.key's INSTEAD OF INSERT trigger will not update key values when
          * the primary key matches.
          */
-        INSERT INTO hdb.key (namme, kvno, key)
-        SELECT NEW.name, (q.js)->'kvno', (q.js)->'key'
+        WITH new_keys AS (
+            SELECT NEW.name AS name, (q.js->>'kvno'::text)::bigint AS kvno,
+                   (q.js->>'ktype'::text)::heimdal.key_type AS ktype, (q.js->>'etype'::text)::heimdal.enc_type AS etype
+            FROM (SELECT jsonb_array_elements((NEW.entry)->'keys')) q(js)
+            UNION ALL
+            SELECT NEW.name AS name, (q.js->>'kvno'::text)::bigint AS kvno,
+                   (q.js->>'ktype'::text)::heimdal.key_type AS ktype, (q.js->>'etype'::text)::heimdal.enc_type AS etype
+            FROM (SELECT jsonb_array_elements(q.js)
+                  FROM (SELECT jsonb_array_elements(q.js->'ext')
+                        FROM (SELECT jsonb_array_elements(NEW.entry->'extensions')) q(js)
+                        WHERE q.js->>'exttype' = 'keysets') q(js)) q(js))
+        DELETE FROM heimdal.keys AS k
+        WHERE k.name = NEW.name AND namespace = 'PRINCIPAL' AND
+              NOT EXISTS (SELECT n.name, n.kvno, n.ktype, n.etype FROM new_keys n
+                          WHERE n.name = k.name AND n.kvno = k.kvno AND n.ktype = k.ktype AND n.etype = k.etype);
+        
+        INSERT INTO heimdal.keys (name, namespace, kvno, ktype, etype, salt, mkvno, key)
+        SELECT NEW.name, 'PRINCIPAL'::heimdal.namespaces, (q.js->>'kvno'::text)::bigint,
+               (q.js->>'ktype'::text)::heimdal.key_type, (q.js->>'etype'::text)::heimdal.enc_type,
+               (q.js->>'salt'::text)::heimdal.salt, (q.js->>'mkvno'::text)::bigint, (q.js->>'key'::text)::bytea
         FROM (SELECT jsonb_array_elements((NEW.entry)->'keys')) q(js)
         UNION ALL
-        SELECT NEW.name, (q.js)->'kvno', (q.js)->'key'
-        FROM (SELECT jsonb_array_elements((q.js)->'keys')
-              FROM (SELECT jsonb_array_elements((q.js)->keys)
-                    FROM (SELECT jsonb_array_elements((NEW.entry)->'extensions')
-                          WHERE (NEW.entry)->'exttype' = 'keysets') q(js)) q(js)) q(js)
+        SELECT NEW.name, 'PRINCIPAL'::heimdal.namespaces, (q.js->>'kvno'::text)::bigint,
+               (q.js->>'ktype'::text)::heimdal.key_type, (q.js->>'etype'::text)::heimdal.enc_type,
+               (q.js->>'salt'::text)::heimdal.salt, (q.js->>'mkvno'::text)::bigint, (q.js->>'key'::text)::bytea
+        FROM (SELECT jsonb_array_elements(q.js)
+              FROM (SELECT jsonb_array_elements(q.js->'ext')
+                    FROM (SELECT jsonb_array_elements(NEW.entry->'extensions')) q(js)
+                    WHERE q.js->>'exttype' = 'keysets') q(js)) q(js)
         ON CONFLICT DO NOTHING;
     END IF;
     IF (fields IS NULL OR fields->'password' IS NOT NULL) AND
        OLD.entry->>'password' <> NEW.entry->>'password' THEN
-        /* XXX Delete old password history too! */
-        /*
-         * hdb.key's INSTEAD OF INSERT trigger will not update key values when
-         * the primary key matches.
-         */
-        UPDATE heimdal.principal
-        SET password = (NEW.entry)->'password'
-        WHERE name = (NEW.entry)->'name' AND (q.js)->'password' IS NOT NULL;
+        UPDATE heimdal.principals
+        SET password = (NEW.entry)->>'password'
+        WHERE name = (NEW.entry)->>'name' AND (NEW.entry)->>'password' IS NOT NULL;
     END IF;
 
     /* XXX Implement updating of all remaining extensions */
