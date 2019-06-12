@@ -1,5 +1,7 @@
 -- SET client_min_messages TO 'debug';
 
+\unset ON_ERROR_STOP
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 /*
  * Data tables go in the schema "heimdal".
@@ -846,20 +848,23 @@ BEGIN
 
     /* Get the list of fields to update */
     fields := NEW.entry->'kadm5_fields';
+
     IF OLD.name IS NULL THEN
         OLD.name := NEW.name; /* Return here -L */
     END IF;
 
-    /* Rename */
+    /* First update everything starting with the name */
     IF OLD.name <> NEW.name OR OLD.realm <> NEW.realm THEN
         UPDATE heimdal.entities
         SET name = NEW.name, realm = NEW.realm
         WHERE name = OLD.name AND realm = OLD.realm AND container = 'PRINCIPAL';
     END IF;
-
-    /* Update a principal */
-
-    /* First update everything but the name */
+    IF (fields IS NULL OR fields->'kvno' IS NOT NULL) AND
+       OLD.entry->>'kvno' <> NEW.entry->>'kvno' THEN
+        UPDATE heimdal.principals
+        SET kvno = (NEW.entry->>'kvno')::bigint
+        WHERE name = NEW.name AND realm = NEW.realm AND container = 'PRINCIPAL';
+    END IF;
     IF (fields IS NULL OR fields->'principal_expire_time' IS NOT NULL) AND
        OLD.entry->>'valid_end' <> NEW.entry->>'valid_end' THEN
         UPDATE heimdal.principals
@@ -905,6 +910,12 @@ BEGIN
         SELECT NEW.name, 'PRINCIPAL', NEW.realm, (jsonb_array_elements_text(NEW.entry->'flags'))::heimdal.princ_flags
         ON CONFLICT DO NOTHING;
     END IF;
+    IF (fields IS NULL OR fields->'password' IS NOT NULL) AND
+       OLD.entry->>'password' <> NEW.entry->>'password' THEN
+        UPDATE heimdal.principals
+        SET password = (NEW.entry)->>'password'
+        WHERE name = (NEW.entry)->>'name' AND realm = (NEW.entry)->>'realm' AND (NEW.entry)->>'password' IS NOT NULL;
+    END IF;
     IF (fields IS NULL OR fields->'etypes' IS NOT NULL) AND
        OLD.entry->>'etypes' <> NEW.entry->>'etypes' THEN
         /* XXX FIXME */
@@ -921,14 +932,16 @@ BEGIN
         SELECT NEW.name, 'PRINCIPAL', NEW.realm, (jsonb_array_elements_text(NEW.entry->'etypes'))::heimdal.enc_type
         ON CONFLICT DO NOTHING;
     END IF;
+
+    /* Update the keys for the principal.  This is a doozy */
     IF (fields IS NULL OR fields->'keydata' IS NOT NULL) AND
        OLD.entry->>'keys' <> NEW.entry->>'keys' THEN
-        /* XXX Delete old keys too! */
-        /*
-         * hdb.key's INSTEAD OF INSERT trigger will not update key values when
-         * the primary key matches.
-         */
+        /* First delete keys that we're dropping in this update */
         WITH new_keys AS (
+            /*
+             * We don't care whether a key appears in NEW.entry->>'keys' or in
+             * the keysets extension.
+             */
             SELECT NEW.name AS name, NEW.realm AS realm,
                    (q.js->>'kvno'::text)::bigint AS kvno,
                    (q.js->>'key'::text)::bytea AS key,
@@ -952,6 +965,13 @@ BEGIN
                                 n.kvno = k.kvno   AND n.key = k.key AND
                                 n.ktype = k.ktype AND n.etype = k.etype);
         
+        /*
+         * Insert any new keys that didn't already exist (see the
+         * ON CONFLICT clause).
+         *
+         * Again, we don't care whether a key appears as NEW.entry->'keys' or
+         * the keysets extension.
+         */
         INSERT INTO heimdal.keys (name, container, realm, kvno, ktype, etype, salt, mkvno, key)
         SELECT NEW.name, 'PRINCIPAL'::heimdal.containers, NEW.realm,
                (q.js->>'kvno'::text)::bigint,
@@ -974,15 +994,58 @@ BEGIN
                     FROM (SELECT jsonb_array_elements(NEW.entry->'extensions')) q(js)
                     WHERE q.js->>'exttype' = 'keysets') q(js)) q(js)
         ON CONFLICT DO NOTHING;
-    END IF;
-    IF (fields IS NULL OR fields->'password' IS NOT NULL) AND
-       OLD.entry->>'password' <> NEW.entry->>'password' THEN
-        UPDATE heimdal.principals
-        SET password = (NEW.entry)->>'password'
-        WHERE name = (NEW.entry)->>'name' AND realm = (NEW.entry)->>'realm' AND (NEW.entry)->>'password' IS NOT NULL;
+
+        /*
+         * However!  We do want to leave the updated principal's current kvno
+         * consistent with the new keys.
+         */
+
+        /*
+         * If the principal was left with no keys, that's probably bad, so
+         * we'll reject.
+         *
+         * If the previous current kvno no longer refers to any existing keys,
+         * but the principal does have keys, then we'll fix its current kvno.
+         */
+        IF NOT EXISTS (
+                SELECT 1
+                FROM heimdal.keys k
+                WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL') THEN
+            RAISE EXCEPTION 'Cannot update a principal and leave it with no keys (%@%)', NEW.name, NEW.realm;
+        END IF;
+
+        /*
+         * If the previous current kvno no longer refers to any existing keys,
+         * but the principal does have keys, then we'll fix its current
+         * kvno by taking the kvno of the NEW.entry->'keys', or else the kvno
+         * of the most recent key for the principal in heimdal.keys.
+         */
+        IF NOT EXISTS (
+                SELECT 1
+                FROM heimdal.keys k
+                WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL' AND
+                      k.kvno = (NEW.entry->>'kvno')::bigint) THEN
+            UPDATE heimdal.principals p
+            SET kvno = (
+                SELECT kvno
+                FROM (
+                    /* Prefer the kvno from NEW.entry->'keys'! (see ORDER BY) */
+                    SELECT 1 AS o, ((NEW.entry->'keys')#>>'{keys,0,kvno}')::bigint AS kvno
+                    WHERE (NEW.entry->'keys')#>'{keys,0,kvno}' IS NOT NULL
+                    UNION ALL
+                    /* Fallback on highest kvno from newest keys (see ORDER BY) */
+                    SELECT 0, kvno
+                    FROM (SELECT kvno AS kvno
+                          FROM heimdal.keys k
+                          WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL'
+                          ORDER BY modified_at DESC, kvno DESC
+                          LIMIT 1) q
+                    ORDER BY 1 DESC LIMIT 1) q)
+            WHERE p.name = NEW.name AND p.realm = NEW.realm AND p.container = 'PRINCIPAL';
+        END IF;
     END IF;
 
-    /* XXX Implement updating of all remaining extensions */
+    /* XXX Implement updating of all remaining extensions, namely the PKINIT ACLs */
     RETURN NULL;
 END;
 $$ LANGUAGE PLPGSQL;

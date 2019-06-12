@@ -1,6 +1,9 @@
 
 \set ON_ERROR_STOP 1
 
+DROP TABLE IF EXISTS x;
+DROP TABLE IF EXISTS y;
+
 -- DELETE past test data here
 DELETE FROM heimdal.entities
 WHERE name like 'test%';
@@ -137,6 +140,7 @@ VALUES ('test0', 'FOO.EXAMPLE', 'alias0',  'FOO.EXAMPLE'),
        ('test0', 'BAR.EXAMPLE', 'alias0',  'BAR.EXAMPLE'),
        ('test0', 'BAR.EXAMPLE', 'alias10', 'BAR.EXAMPLE');
 -- Use SELECTs here to check for incorrect results
+/*
 SELECT * FROM hdb.modified_info WHERE name LIKE 'test0%';
 SELECT * FROM hdb.key WHERE name LIKE 'test0%';
 SELECT * FROM hdb.keyset WHERE name LIKE 'test0%';
@@ -148,7 +152,10 @@ SELECT * FROM hdb.exts_raw WHERE name LIKE 'test0%';
 SELECT * FROM hdb.exts WHERE name LIKE 'test0%';
 SELECT * FROM hdb.flags WHERE name LIKE 'test0%';
 SELECT * FROM hdb.etypes WHERE name LIKE 'test0%';
-SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
+ */
+--SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
+CREATE TEMP TABLE x AS
+SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
 
 UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"valid_end"}'::TEXT[], to_jsonb(current_timestamp + '50 years'::INTERVAL))
 WHERE name LIKE 'test0%';
@@ -185,6 +192,11 @@ UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"keys"}'::TEXT[],
                                                            'mkvno',NULL)))
 WHERE name LIKE 'test0%';
 
+--SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
+CREATE TEMP TABLE y AS 
+SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
+
+/*
 SELECT jsonb_set(e.entry::jsonb, '{"keys"}'::TEXT[],
                       jsonb_build_array(jsonb_build_object('key',E'\\x1234'::TEXT,
                                                            'kvno',1::BIGINT,
@@ -193,6 +205,6 @@ SELECT jsonb_set(e.entry::jsonb, '{"keys"}'::TEXT[],
                                                            'ktype','SYMMETRIC'::TEXT,
                                                            'mkvno',NULL))) FROM hdb.hdb AS e
 WHERE name LIKE 'test0%';
-
+ */
 -- Use INSERT, UPDATE, DELETE on hdb views to test triggers
 -- Use more SELECTs to check that updates took
