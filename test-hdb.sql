@@ -148,8 +148,6 @@ SELECT * FROM hdb.keysets WHERE name LIKE 'test0%';
 SELECT * FROM hdb.aliases WHERE name LIKE 'test0%';
 SELECT * FROM hdb.pwh1 WHERE name LIKE 'test0%';
 SELECT * FROM hdb.pwh WHERE name LIKE 'test0%';
-SELECT * FROM hdb.exts_raw WHERE name LIKE 'test0%';
-SELECT * FROM hdb.exts WHERE name LIKE 'test0%';
 SELECT * FROM hdb.flags WHERE name LIKE 'test0%';
 SELECT * FROM hdb.etypes WHERE name LIKE 'test0%';
  */
@@ -157,33 +155,65 @@ SELECT * FROM hdb.etypes WHERE name LIKE 'test0%';
 CREATE TEMP TABLE x AS
 SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"valid_end"}'::TEXT[], to_jsonb(current_timestamp + '50 years'::INTERVAL))
+UPDATE x SET display_name = 'testfoo@BAR.EXAMPLE', name = 'testfoo', realm = 'BAR.EXAMPLE',
+             entry = jsonb_set(jsonb_set(entry::jsonb, '{"name"}'::TEXT[], to_jsonb('testfoo'::TEXT))::jsonb,
+                               '{"realm"}'::TEXT[], to_jsonb('BAR.EXAMPLE'::TEXT));
+
+UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",0,"alias_name"}'::TEXT[], to_jsonb('aliasfoo'::TEXT));
+UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",1,"alias_name"}'::TEXT[], to_jsonb('aliasfoo2'::TEXT));
+
+INSERT INTO hdb.hdb
+    (name, realm, entry)
+SELECT name, realm, entry FROM x;
+
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"valid_end"}'::TEXT[], to_jsonb(current_timestamp + '50 years'::INTERVAL))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"pw_end"}'::TEXT[], to_jsonb(current_timestamp + '50 years'::INTERVAL))
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"pw_end"}'::TEXT[], to_jsonb(current_timestamp + '50 years'::INTERVAL))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"last_pw_change"}'::TEXT[], to_jsonb(current_timestamp - '2 years'::INTERVAL))
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"last_pw_change"}'::TEXT[], to_jsonb(current_timestamp - '2 years'::INTERVAL))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"max_life"}'::TEXT[], to_jsonb('23 hours'::INTERVAL))
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"max_life"}'::TEXT[], to_jsonb('23 hours'::INTERVAL))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"max_renew"}'::TEXT[], to_jsonb('69 days'::INTERVAL))
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"max_renew"}'::TEXT[], to_jsonb('69 days'::INTERVAL))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"password"}'::TEXT[], to_jsonb('foobarbaz'::TEXT))
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"password"}'::TEXT[], to_jsonb('foobarbaz'::TEXT))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"flags"}'::text[], jsonb_build_array('CLIENT','SERVER'))
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"flags"}'::text[], jsonb_build_array('CLIENT','SERVER'))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"etypes"}'::text[],
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"etypes"}'::text[],
                                      jsonb_build_array('aes128-cts-hmac-sha1-96','aes256-cts-hmac-sha1-96',
                                                        'aes128-cts-hmac-sha256','aes256-cts-hmac-sha512'))
 WHERE name LIKE 'test0%';
 
-UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"keys"}'::TEXT[],
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"aliases"}'::TEXT[],
+                      jsonb_build_array(jsonb_build_object('alias_name','kahlui'::TEXT,
+                                         'alias_realm','BAR.EXAMPLE'::TEXT),jsonb_build_object('alias_name','kentobento'::TEXT,
+                                         'alias_realm','BAR.EXAMPLE'::TEXT)))
+WHERE name LIKE 'test0%' AND realm LIKE 'B%';
+
+SELECT * from heimdal.password_history;
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"password_history",0,"digest"}'::TEXT[],
+                      to_jsonb(encode(E'\\xA590','base64')))
+WHERE name = 'test0' and realm like 'B%';;
+
+
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"keysets",0}'::TEXT[],
+                      jsonb_build_array(jsonb_build_object('key',E'\\x2222'::TEXT,
+                                                           'kvno',5::BIGINT,
+                                                           'salt',NULL,
+                                                           'etype','aes128-cts-hmac-sha1-96'::TEXT,
+                                                           'ktype','SYMMETRIC'::TEXT,
+                                                           'mkvno',NULL)))
+WHERE name LIKE 'test0%';
+
+UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"keys"}'::TEXT[],
                       jsonb_build_array(jsonb_build_object('key',E'\\x1234'::TEXT,
                                                            'kvno',1::BIGINT,
                                                            'salt',NULL,
@@ -191,6 +221,8 @@ UPDATE hdb.hdb SET ENTRY = jsonb_set(entry::jsonb, '{"keys"}'::TEXT[],
                                                            'ktype','SYMMETRIC'::TEXT,
                                                            'mkvno',NULL)))
 WHERE name LIKE 'test0%';
+
+DELETE FROM hdb.hdb WHERE name = 'testfoo';
 
 --SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
 CREATE TEMP TABLE y AS 

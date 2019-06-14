@@ -182,8 +182,6 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
     container           heimdal.containers,
     realm               TEXT,
     entity_type         heimdal.entity_types NOT NULL,
-    name_type            heimdal.kerberos_name_type
-                        DEFAULT ('UNKNOWN'),
     id                  BIGINT DEFAULT (nextval('heimdal.ids')),
     policy              TEXT,
     LIKE heimdal.common INCLUDING ALL,
@@ -202,6 +200,8 @@ CREATE TABLE IF NOT EXISTS heimdal.principals (
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
     realm               TEXT,
+    name_type           heimdal.kerberos_name_type
+                        DEFAULT ('UNKNOWN'),
     /* flags and etypes are stored separately */
     kvno                BIGINT DEFAULT (1),
     pw_life             INTERVAL DEFAULT ('90 days'::interval),
@@ -310,7 +310,6 @@ CREATE TABLE IF NOT EXISTS heimdal.aliases (
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
     realm               TEXT,
-    alias_display_name  TEXT,
     alias_name          TEXT,
     alias_container     heimdal.containers
                         DEFAULT ('PRINCIPAL')
@@ -353,7 +352,7 @@ CREATE TABLE IF NOT EXISTS heimdal.password_history (
 
 CREATE TYPE heimdal.pkix_name AS (
     display             TEXT,   /* display form of name */
-    name_type            heimdal.pkix_name_type,
+    name_type           heimdal.pkix_name_type,
     name                BYTEA
 );
 CREATE TABLE IF NOT EXISTS heimdal.pkinit_cert_names (
@@ -395,7 +394,7 @@ SELECT
                        'kvno',k.kvno::bigint,
                        'mkvno',k.mkvno::bigint,
                        'salt',k.salt::text,
-                       'key',k.key::text) AS key
+                       'key',encode(k.key, 'base64')) AS key
 FROM heimdal.keys k
 WHERE k.enabled AND k.valid_start <= current_timestamp AND
       k.valid_end > current_timestamp;
@@ -425,7 +424,8 @@ SELECT p.name AS name, p.realm AS realm,
        jsonb_build_object('mkvno',p.mkvno,
                           'etype',p.etype::text,
                           'digest_alg',p.digest_alg::text,
-                          'digest',encode(p.digest, 'base64')) AS old_password
+                          'digest',encode(p.digest, 'base64'),
+                          'set_at',p.created_at::text) AS old_password
 FROM heimdal.password_history p;
 
 CREATE OR REPLACE VIEW hdb.pwh AS
@@ -434,28 +434,6 @@ SELECT p1.name AS name, p1.realm AS realm, 'password_history' AS extname,
 FROM hdb.pwh1 p1
 GROUP BY p1.name, p1.realm;
 
-CREATE OR REPLACE VIEW hdb.exts_raw AS
-SELECT name AS name, realm AS realm, extname AS extname, ext AS ext
-FROM hdb.keysets
-UNION ALL
-SELECT name, realm, extname, ext
-FROM hdb.aliases
-UNION ALL
-SELECT name, realm, extname, ext
-FROM hdb.pwh;
-
-/*
- * UNION ALL
- * SELECT name, realm, 'null', jsonb_build_object()
- * FROM heimdal.principals;
- */
-
-CREATE OR REPLACE VIEW hdb.exts AS
-SELECT name AS name, realm AS realm,
-       jsonb_agg(jsonb_build_object('exttype',extname,
-                                    'ext',ext)) AS exts
-FROM hdb.exts_raw
-GROUP BY name, realm;
 /*
  * XXX Finish, add all remaining hdb entry extensions here:
  *
@@ -464,7 +442,6 @@ GROUP BY name, realm;
  *  - PKINIT certs
  *  - S4U constrained delegation ACLs
  */
-;
 
 CREATE OR REPLACE VIEW hdb.flags AS
 SELECT p.name AS name, p.realm AS realm, jsonb_agg(p.flag::text) AS flags
@@ -486,7 +463,7 @@ SELECT e.display_name AS display_name, e.name AS name, e.realm AS realm,
             'realm',e.realm,
             'kvno',p.kvno,
             'keys',keys.keys,
-            'name_type',e.name_type,
+            'name_type',p.name_type,
             'created_by',e.created_by,
             'created_at',e.created_at::text,
             'modified_by',modinfo.modified_by,
@@ -501,12 +478,16 @@ SELECT e.display_name AS display_name, e.name AS name, e.realm AS realm,
             'max_renew',coalesce(p.max_renew::text,''),
             'flags',coalesce(flags.flags,'[]'::jsonb),
             'etypes',coalesce(etypes.etypes,jsonb_build_array()),
-            'extensions',coalesce(exts.exts,'[]'::jsonb)) AS entry
+            'aliases',a.ext,
+            'keysets',keysets.ext,
+            'password_history',pwh.ext) AS entry
 FROM heimdal.entities e
 JOIN hdb.modified_info modinfo USING (name, realm, container)
 JOIN heimdal.principals p USING (name, realm, container)
 JOIN hdb.flags flags USING (name, realm)
-LEFT JOIN hdb.exts exts USING (name, realm)
+LEFT JOIN hdb.aliases a USING (name, realm)
+LEFT JOIN hdb.keysets keysets USING (name, realm)
+LEFT JOIN hdb.pwh pwh USING (name, realm)
 LEFT JOIN hdb.etypes etypes ON e.name = etypes.name AND e.realm = etypes.realm
 LEFT JOIN hdb.keyset keys ON p.name = keys.name AND p.realm = keys.realm AND p.kvno = keys.kvno
 WHERE e.container = 'PRINCIPAL' AND
@@ -534,18 +515,19 @@ WHERE a.container = 'PRINCIPAL' AND
 /* Create triggers on heimdal inserts -L */
 
 /* XXX This function is kinda sloppy and should be redone -L */
+/* Reverse cascade from non-entities to entities */
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_entities_func()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF TG_OP = 'INSERT' OR NEW.name <> OLD.name OR NEW.realm <> OLD.realm THEN
+    IF TG_TABLE_NAME = 'entities' THEN
         NEW.display_name :=
-            CASE TG_TABLE_NAME
-            WHEN 'principals' THEN NEW.name || '@' || NEW.realm
+            CASE NEW.entity_type
+            WHEN 'PRINCIPAL' THEN NEW.name || '@' || NEW.realm
             ELSE lower(TG_TABLE_NAME) || ':' || NEW.name || '@' || lower(NEW.realm)
             END;
     END IF;
-    IF TG_TABLE_NAME = 'principals' THEN
-        UPDATE heimdal.entities SET display_name = NEW.display_name WHERE name = NEW.name AND realm = NEW.realm;
+    IF TG_OP = 'UPDATE' AND TG_WHEN = 'AFTER' THEN
+        UPDATE heimdal.principals SET display_name = NULL WHERE name = NEW.name AND realm = NEW.realm;
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
@@ -556,11 +538,27 @@ ON heimdal.entities
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_entities_func();
 
-CREATE TRIGGER before_on_heimdal_principals_set_display_name
-BEFORE INSERT OR UPDATE
-ON heimdal.principals
+CREATE TRIGGER after_on_heimdal_entities_set_display_name
+AFTER UPDATE
+ON heimdal.entities
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_entities_func();
+
+CREATE OR REPLACE FUNCTION heimdal.trigger_on_principals_func()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.display_name := (
+        SELECT e.display_name FROM heimdal.entities e WHERE e.name = NEW.name AND
+                                                            e.realm = NEW.realm AND
+                                                            e.container = 'PRINCIPAL');
+    RETURN NEW;
+END; $$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER before_on_heimdal_principals_set_display_name
+BEFORE INSERT
+ON heimdal.principals
+FOR EACH ROW
+EXECUTE FUNCTION heimdal.trigger_on_principals_func();
 
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_aliases_func()
 RETURNS TRIGGER AS $$
@@ -576,6 +574,10 @@ BEGIN
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
+        IF OLD.name <> NEW.name OR OLD.realm <> NEW.realm THEN
+            UPDATE heimdal.entities SET name = NEW.name, realm = NEW.realm
+            WHERE name = OLD.name AND realm = OLD.realm AND container = 'PRINCIPAL';
+        END IF;
         IF OLD.alias_name <> NEW.alias_name OR OLD.alias_realm <> NEW.alias_realm THEN
             /*
              * Here we work around the FK ON UPDATE action on heimdal.aliases
@@ -586,7 +588,7 @@ BEGIN
              * another day.
              */
              UPDATE heimdal.entities SET name = NEW.alias_name, realm = NEW.alias_realm
-             WHERE name = OLD.alias_name AND realm = OLD.alias_realm;
+             WHERE name = OLD.alias_name AND realm = OLD.alias_realm AND container = 'PRINCIPAL';
         END IF;
         RETURN NEW;
     END IF;
@@ -617,85 +619,69 @@ RETURNS TRIGGER AS $$
 DECLARE
     fields JSONB;
 BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        WITH new_keys AS (
+            SELECT (q.js->>'kvno'::text)::bigint AS kvno,
+                   decode(q.js->>'key', 'base64')::bytea AS key,
+                   (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
+                   (q.js->>'etype'::text)::heimdal.enc_type AS etype
+            FROM (SELECT jsonb_array_elements(NEW.keys)) q(js))
+        DELETE FROM heimdal.keys AS k
+        WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL' AND
+              NOT EXISTS (SELECT 1 FROM new_keys n
+                          WHERE n.name = k.name   AND n.realm = k.realm AND
+                                n.kvno = k.kvno   AND n.key = k.key AND
+                                n.ktype = k.ktype AND n.etype = k.etype);
+    END IF;
     INSERT INTO heimdal.keys
         (name, container, realm, kvno, ktype, etype, key, salt, mkvno)
     SELECT NEW.name, 'PRINCIPAL', NEW.realm,
-           (k->>'kvno'::text)::bigint, (k->>'ktype'::text)::heimdal.key_type,
-           (k->>'etype'::text)::heimdal.enc_type, (k->>'key'::text)::bytea,
+           (k->>'kvno'::text)::bigint,
+           (k->>'ktype'::text)::heimdal.key_type,
+           (k->>'etype'::text)::heimdal.enc_type,
+           decode(k->>'key', 'base64')::bytea,
            (k->>'salt'::text)::heimdal.salt, (k->>'mkvno'::text)::bigint
-    FROM jsonb_array_elements(NEW.keys) k;
+    FROM jsonb_array_elements(NEW.keys) k
+    ON CONFLICT DO NOTHING;
     RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER instead_of_on_hdb_keyset
-INSTEAD OF INSERT
+INSTEAD OF INSERT OR UPDATE
 ON hdb.keyset
 FOR EACH ROW
 EXECUTE FUNCTION hdb.instead_of_on_keyset_func();
 
-CREATE OR REPLACE FUNCTION hdb.instead_of_on_exts_func()
-RETURNS TRIGGER AS $$
-BEGIN
-    /* Same pattern for all extensions */
-
-    INSERT INTO hdb.aliases
-        (name, realm, ext)
-    SELECT NEW.name, NEW.realm, e->'ext'
-    FROM jsonb_array_elements(NEW.exts) e
-    WHERE (e->>'exttype'::text) = 'aliases';
-    
-    INSERT INTO hdb.keysets
-        (name, realm, ext)
-    SELECT NEW.name, NEW.realm, e->'ext'
-    FROM jsonb_array_elements(NEW.exts) e
-    WHERE (e->>'exttype'::text) = 'keysets';
-    
-    INSERT INTO hdb.pwh
-        (name, realm, ext)
-    SELECT NEW.name, NEW.realm, e->'ext'
-    FROM jsonb_array_elements(NEW.exts) e
-    WHERE (e->>'exttype'::text) = 'password_history';
-
-    RETURN NEW;
-END; $$ LANGUAGE PLPGSQL;
-
-CREATE TRIGGER instead_of_on_hdb_exts
-INSTEAD OF INSERT
-ON hdb.exts
-FOR EACH ROW
-EXECUTE FUNCTION hdb.instead_of_on_exts_func();
-
 /* XXX Think about trigger firing order vs FK cascading order */
 CREATE OR REPLACE FUNCTION hdb.instead_of_on_aliases_func()
 RETURNS TRIGGER AS $$
-DECLARE
-    fields JSONB;
 BEGIN
-    IF (TG_OP IN ('INSERT', 'UPDATE') AND NEW.extname <> 'keysets') OR
-       (TG_OP IN ('DELETE', 'UPDATE') AND OLD.extname <> 'keysets') THEN
-        RETURN NULL; /* XXX Raise instead! */
-    END IF;
-
     IF TG_OP = 'UPDATE' THEN
         /* Delete aliases that existed but don't appear in 'ext' -- they're getting dropped*/
         WITH new_aliases AS (
             -- New aliases
-            SELECT a.alias AS alias FROM jsonb_array_elements_text(NEW.ext) a(alias))
+            SELECT (q.js->>'alias_name') AS alias_name,
+                   (q.js->>'alias_realm') AS alias_realm FROM jsonb_array_elements(NEW.ext) q(js))
         DELETE FROM heimdal.aliases AS a
         USING new_aliases AS n
         WHERE a.name = NEW.name AND a.realm = NEW.realm /* XXX this assumes this trigger runs after cascades */ AND
-              a.container = 'PRINCIPAL' AND NEW.container = 'PRINCIPAL' AND
+              a.container = 'PRINCIPAL' AND
               -- Delete existing aliases that are not in the new alias list
-              NOT EXISTS (SELECT 1 FROM new_aliases n WHERE n.alias->>'alias_name' = a.alias_name AND n.alias->>'alias_realm' = a.alias_realm);
+              NOT EXISTS (SELECT 1 FROM new_aliases n WHERE n.alias_name = a.alias_name AND n.alias_realm = a.alias_realm);
     END IF;
 
-    /* Insert any [new] aliases */
+    /* Insert any [new] aliases that aren't repeats, on conflict do nothing fails due to trigger_on_aliases_func() */
+    WITH new_aliases AS (
+             -- New aliases
+        SELECT NEW.name AS name, NEW.realm AS realm,
+               (q.js->>'alias_name') AS alias_name,
+               (q.js->>'alias_realm') AS alias_realm FROM jsonb_array_elements(NEW.ext) q(js))
     INSERT INTO heimdal.aliases
         (name, container, realm, alias_name, alias_container, alias_realm)
     SELECT NEW.name, 'PRINCIPAL', NEW.realm,
-           a.alias_name, 'PRINCIPAL', a.alias_realm
-    FROM jsonb_array_elements_text(NEW.ext) AS a(alias)
-    ON CONFLICT DO NOTHING;
+           n.alias_name, 'PRINCIPAL', n.alias_realm
+    FROM new_aliases n
+    LEFT OUTER JOIN heimdal.aliases USING (name, realm, alias_name, alias_realm);
     RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
 
@@ -708,24 +694,21 @@ EXECUTE FUNCTION hdb.instead_of_on_aliases_func();
 CREATE OR REPLACE FUNCTION hdb.instead_of_on_keysets_func()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF (TG_OP IN ('INSERT', 'UPDATE') AND NEW.extname <> 'keysets') OR
-       (TG_OP IN ('DELETE', 'UPDATE') AND OLD.extname <> 'keysets') THEN 
-        RETURN NULL; /* XXX Raise instead! */
-    END IF;
-
     IF TG_OP = 'UPDATE' THEN 
-        /* Delete aliases that existed but don't appear in 'ext' -- they're getting dropped*/
+        /* Delete keysets that existed but don't appear in 'ext' -- they're getting dropped*/
         WITH new_keysets AS ( 
-            -- New entries
-            SELECT (e.entry)->'kvno' AS kvno, (e.entry)->'ktype' AS ktype,
-                   (e.entry)->'etype' AS etype
-            FROM (SELECT jsonb_array_elements(e) FROM jsonb_array_elements(NEW.ext) e(e)) e(entry))
-        DELETE FROM heimdal.keys AS k 
-        USING new_keysets AS n 
-        WHERE k.name = NEW.name AND k.realm = NEW.realm /* XXX this assumes this trigger runs after cascades */ AND
-              k.container = 'PRINCIPAL' AND NEW.container = 'PRINCIPAL' AND
-              -- Delete existing entries that are not in the new entry list
-              NOT EXISTS (SELECT 1 FROM new_keysets n WHERE n.kvno = k.kvno AND n.ktype = k.ktype AND n.etype = k.etype);
+            SELECT (q.js->>'kvno'::text)::bigint AS kvno,
+                   (q.js->>'key'::text)::bytea AS key,
+                   (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
+                   (q.js->>'etype'::text)::heimdal.enc_type AS etype
+            FROM (SELECT jsonb_array_elements(q.js)
+                  FROM (SELECT jsonb_array_elements(NEW.ext)) q(js)) q(js))
+        DELETE FROM heimdal.keys AS k
+        WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL' AND
+              NOT EXISTS (SELECT 1 FROM new_keysets n
+                          WHERE n.name = k.name   AND n.realm = k.realm AND
+                                n.kvno = k.kvno   AND n.key = k.key AND
+                                n.ktype = k.ktype AND n.etype = k.etype);
     END IF;
 
     /* Insert any [new] entries */
@@ -749,33 +732,52 @@ EXECUTE FUNCTION hdb.instead_of_on_keysets_func();
 CREATE OR REPLACE FUNCTION hdb.instead_of_on_pwh_func()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF (TG_OP IN ('INSERT', 'UPDATE') AND NEW.extname <> 'keysets') OR
-       (TG_OP IN ('DELETE', 'UPDATE') AND OLD.extname <> 'keysets') THEN
-        RETURN NULL; /* XXX Raise instead! */
-    END IF;
-
+    RAISE NOTICE '% % %', TG_OP, TG_TABLE_NAME, NEW;
     IF TG_OP = 'UPDATE' THEN
         /* Delete aliases that existed but don't appear in 'ext' -- they're getting dropped*/
-        WITH new_pwh AS (
-            -- New entries
-            SELECT (e.entry)->'digest' AS digest FROM jsonb_array_elements(NEW.ext) e(entry))
+        WITH deletions AS (
+                SELECT (p.js->>'digest_alg'::text)::heimdal.digest_type AS digest_alg,
+                       (p.js->>'digest') AS digest,
+                       (p.js->>'etype'::text)::heimdal.enc_type AS etype,
+                       (p.js->>'mkvno'::text)::bigint AS mkvno,
+                       (p.js->>'set_at'::text)::text AS set_at
+                FROM (SELECT jsonb_array_elements(ext)
+                      FROM hdb.pwh p
+                      WHERE p.name = NEW.name AND p.realm = NEW.realm) p(js)
+            EXCEPT
+                SELECT (q.js->>'digest_alg'::text)::heimdal.digest_type AS digest_alg,
+                       (q.js->>'digest') AS digest,
+                       (q.js->>'etype'::text)::heimdal.enc_type AS etype,
+                       (q.js->>'mkvno'::text)::bigint AS mkvno,
+                       (q.js->>'set_at'::text)::text AS set_at
+                FROM jsonb_array_elements(NEW.ext) q(js))
         DELETE FROM heimdal.password_history AS p
-        USING new_pwh AS n
+        USING deletions AS d
         WHERE p.name = NEW.name AND p.realm = NEW.realm /* XXX this assumes this trigger runs after cascades */ AND
-              p.container = 'PRINCIPAL' AND NEW.container = 'PRINCIPAL' AND
-              -- Delete existing entries that are not in the new entry list
-              NOT EXISTS (SELECT 1 FROM new_pwh n WHERE n.digest = p.digest);
+              p.container = 'PRINCIPAL' AND
+              p.digest_alg = d.digest_alg AND
+              p.digest = decode(d.digest,'base64')::bytea;
     END IF;
 
     /* Insert any [new] entries */
-    INSERT INTO heimdal.password_history
-        (name, container, realm, etype, digest_alg, digest, mkvno)
-    SELECT NEW.name, 'PRINCIPAL', NEW.realm,
-           (e.entry->>'etype')::text::heimdal.enc_type,
-           (e.entry->>'digest_alg')::text::heimdal.digest_type,
-           decode(e.entry->>'digest', 'base64'),
-           (e.entry->>'mkvno')::text::bigint
-    FROM jsonb_array_elements(NEW.ext) AS e(entry)
+    WITH additions AS (
+            SELECT (q.js->>'digest_alg'::text)::heimdal.digest_type AS digest_alg,
+                   (q.js->>'digest') AS digest,
+                   (q.js->>'etype'::text)::heimdal.enc_type AS etype,
+                   (q.js->>'mkvno'::text)::bigint AS mkvno
+            FROM jsonb_array_elements(NEW.ext) q(js)
+        EXCEPT
+            SELECT (p.js->>'digest_alg'::text)::heimdal.digest_type AS digest_alg,
+                   (p.js->>'digest') AS digest,
+                   (p.js->>'etype'::text)::heimdal.enc_type AS etype,
+                   (p.js->>'mkvno'::text)::bigint AS mkvno
+            FROM (SELECT jsonb_array_elements(ext)
+                  FROM hdb.pwh p
+                  WHERE p.name = NEW.name AND p.realm = NEW.realm) p(js))
+    INSERT INTO heimdal.password_history (name, container, realm, etype, digest_alg, digest, mkvno)
+    SELECT NEW.name, 'PRINCIPAL', NEW.realm, a.etype, a.digest_alg,
+           decode(a.digest, 'base64')::bytea, a.mkvno
+    FROM additions a
     ON CONFLICT DO NOTHING;
     RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
@@ -812,10 +814,10 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         /* Add the principal's base entity */
         INSERT INTO heimdal.entities
-            (name, container, realm, entity_type, name_type, policy)
+            (name, container, realm, entity_type, policy)
         SELECT (NEW.entry)->>'name',  'PRINCIPAL',
                (NEW.entry)->>'realm', 'PRINCIPAL',
-               ((NEW.entry)->>'name_type'::text)::heimdal.kerberos_name_type, (NEW.entry)->'policy';
+                (NEW.entry)->'policy';
 
         /* Add the principal */
         INSERT INTO heimdal.principals
@@ -832,13 +834,25 @@ BEGIN
         SELECT (NEW.entry)->>'name', 'PRINCIPAL', (NEW.entry)->>'realm', (flag::text)::heimdal.princ_flags
         FROM jsonb_array_elements_text((NEW.entry)->'flags') f(flag);
 
+        /* Add its enc_types */
+        INSERT INTO heimdal.principal_etypes
+            (name, container, realm, etype)
+        SELECT (NEW.entry)->>'name', 'PRINCIPAL', (NEW.entry)->>'realm', (etype::text)::heimdal.enc_type
+        FROM jsonb_array_elements_text((NEW.entry)->'etypes') e(etype);
+
         /* Insert current keyset indirectly via INSTEAD OF INSERT TRIGGER on hdb.keyset */
         INSERT INTO hdb.keyset (name, realm, keys)
         SELECT (NEW.entry)->>'name', (NEW.entry)->>'realm', (NEW.entry)->'keys';
 
-        /* Insert extensions indirectly via INSTEAD OF INSERT TRIGGER on hdb.exts */
-        INSERT INTO hdb.exts (name, realm, exts)
-        SELECT (NEW.entry)->>'name', (NEW.entry)->>'realm', (NEW.entry)->'extensions';
+        /* Insert extensions directly via INSTEAD OF INSERT TRIGGERS on hdb views */
+        INSERT INTO hdb.keysets (name, realm, ext)
+        SELECT (NEW.entry)->>'name', (NEW.entry)->>'realm', (NEW.entry)->'keysets';
+
+        INSERT INTO hdb.aliases (name, realm, ext)
+        SELECT (NEW.entry)->>'name', (NEW.entry)->>'realm', (NEW.entry)->'aliases';
+
+        INSERT INTO hdb.pwh (name, realm, ext)
+        SELECT (NEW.entry)->>'name', (NEW.entry)->>'realm', (NEW.entry)->'password_history';
         RETURN NEW;
     END IF;
 
@@ -933,6 +947,20 @@ BEGIN
         ON CONFLICT DO NOTHING;
     END IF;
 
+    IF (fields IS NULL OR fields->'aliases' IS NOT NULL) AND
+        OLD.entry->'aliases' <> NEW.entry->'aliases' THEN
+        UPDATE hdb.aliases
+        SET ext = NEW.entry->'aliases'
+        WHERE name = (NEW.entry)->>'name' AND realm = (NEw.entry)->>'realm';
+    END IF;
+
+    IF (fields IS NULL OR fields->'password_history' IS NOT NULL) AND
+        OLD.entry->'password_history' <> NEW.entry->'password_history' THEN
+        UPDATE hdb.pwh
+        SET ext = NEW.entry->'password_history'
+        WHERE name = (NEW.entry)->>'name' AND realm = (NEW.entry)->>'realm';
+    END IF;
+
     /* Update the keys for the principal.  This is a doozy */
     IF (fields IS NULL OR fields->'keydata' IS NOT NULL) AND
        OLD.entry->>'keys' <> NEW.entry->>'keys' THEN
@@ -955,9 +983,7 @@ BEGIN
                    (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
                    (q.js->>'etype'::text)::heimdal.enc_type AS etype
             FROM (SELECT jsonb_array_elements(q.js)
-                  FROM (SELECT jsonb_array_elements(q.js->'ext')
-                        FROM (SELECT jsonb_array_elements(NEW.entry->'extensions')) q(js)
-                        WHERE q.js->>'exttype' = 'keysets') q(js)) q(js))
+                  FROM (SELECT jsonb_array_elements(NEW.entry->'keysets')) q(js)) q(js))
         DELETE FROM heimdal.keys AS k
         WHERE k.name = NEW.name AND k.realm = NEW.realm AND container = 'PRINCIPAL' AND
               NOT EXISTS (SELECT 1 FROM new_keys n
@@ -990,9 +1016,7 @@ BEGIN
                (q.js->>'mkvno'::text)::bigint,
                (q.js->>'key'::text)::bytea
         FROM (SELECT jsonb_array_elements(q.js)
-              FROM (SELECT jsonb_array_elements(q.js->'ext')
-                    FROM (SELECT jsonb_array_elements(NEW.entry->'extensions')) q(js)
-                    WHERE q.js->>'exttype' = 'keysets') q(js)) q(js)
+              FROM (SELECT jsonb_array_elements(NEW.entry->'keysets')) q(js)) q(js)
         ON CONFLICT DO NOTHING;
 
         /*
