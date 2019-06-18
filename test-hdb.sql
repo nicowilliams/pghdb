@@ -1,13 +1,107 @@
+\unset ON_ERROR_STOP
+
+CREATE SCHEMA test;
+DROP TABLE IF EXISTS test.tests;
+CREATE TABLE test.tests (testname TEXT PRIMARY KEY, pass BOOLEAN);
+
+CREATE OR REPLACE FUNCTION test.expect_success(testname TEXT, code TEXT)
+RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
+BEGIN
+    EXECUTE code;
+    INSERT INTO test.tests (testname, pass)
+    SELECT testname, TRUE;
+    RETURN TRUE;
+EXCEPTION
+WHEN OTHERS THEN
+    INSERT INTO test.tests (testname, pass)
+    SELECT testname, FALSE;
+    RETURN FALSE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION test.expect_exception(testname TEXT, code TEXT)
+RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
+BEGIN
+    EXECUTE code;
+    INSERT INTO test.tests (testname, pass)
+    SELECT testname, FALSE;
+    RETURN FALSE;
+EXCEPTION
+WHEN OTHERS THEN
+    INSERT INTO test.tests (testname, pass)
+    SELECT testname, TRUE;
+    RETURN TRUE;
+END;
+$$;
+
+DROP TABLE IF EXISTS test_hdb_hdb_entry_update;
+CREATE TEMP TABLE IF NOT EXISTS test_hdb_hdb_entry_update
+    (testname TEXT, name TEXT, realm TEXT, entry JSONB);
+
+CREATE OR REPLACE FUNCTION test.check_hdb_hdb_jsonb_update(
+    _testname TEXT,
+    _name TEXT,
+    _realm TEXT,
+    _code TEXT)
+RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
+BEGIN
+    EXECUTE format($q$
+        INSERT INTO pg_temp.test_hdb_hdb_entry_update
+            (testname, name, realm, entry)
+        SELECT %1$L, %2$L, %3$L, %4$s
+        FROM hdb.hdb
+        WHERE name = %2$L AND realm = %3$L
+        $q$, _testname, _name, _realm, _code);
+
+    EXECUTE format($q$
+        UPDATE hdb.hdb
+        SET entry = %3$s
+        WHERE name = %1$L AND realm = %2$L
+        $q$, _name, _realm, _code);
+    
+    INSERT INTO test.tests (testname, pass)
+    SELECT testname, hdb.entry = t.entry
+    FROM hdb.hdb hdb
+    JOIN pg_temp.test_hdb_hdb_entry_update t USING (name, realm)
+    WHERE name = _name AND realm = _realm AND t.testname = _testname;
+
+    RETURN pass FROM test.tests WHERE testname = _testname;
+END;$$;
+
+CREATE OR REPLACE FUNCTION test.test_insert_PKs(testname TEXT, code TEXT)
+RETURNS BOOLEAN LANGUAGE SQL AS $$
+SELECT test.expect_success(testname || ' first', code) AND
+       test.expect_exception(testname || ' second', code);
+$$;
+/*
+CREATE OR REPLACE FUNCTION test.check_selects(testname TEXT, lft TEXT, rhgt TEXT)
+RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
+    EXECUTE format($q$
+        SELECT count(*) == 0
+        FROM (%1s) lft
+        NATURAL FULL OUTER JOIN (%2s) rght;
+    $q$, lft, rhgt);
+$$;
+
+CREATE TEMP TABLE x AS SELECT name, realm, jsonb_set(entry, ...) FROM hdb.hdb;
+UPDATE ...;
+SELECT test.check_selects('some test',
+                          $$SELECT name, realm, entry FROM x$$,
+                          $$SELECT name, realm, entry FROM hdb.hdb$$);
+
+\o /dev/null
+SELECT test.expect_success('trivial select', $$select 1;$$);
+SELECT test.expect_exception('syntax error', $$blah;$$);
+\o
 
 \set ON_ERROR_STOP 1
-
-DROP TABLE IF EXISTS x;
-DROP TABLE IF EXISTS y;
+*/
 
 -- DELETE past test data here
 DELETE FROM heimdal.entities
 WHERE name like 'test%';
 -- INSERT test data here
+SELECT test.test_insert_PKs('test entity creation', $$
 INSERT INTO heimdal.entities (name, realm, container, entity_type)
 VALUES ('test0', 'FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
        ('test1', 'FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
@@ -19,6 +113,8 @@ VALUES ('test0', 'FOO.EXAMPLE', 'PRINCIPAL', 'USER'),
        ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
        ('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
        ('testgroup2', 'FOO.EXAMPLE', 'GROUP', 'GROUP');
+$$);
+SELECT test.test_insert_PKs('test principal insertion', $$
 INSERT INTO heimdal.principals (name, realm, password)
 VALUES ('test0', 'FOO.EXAMPLE', 'password-00'),
        ('test1', 'FOO.EXAMPLE', 'password-01'),
@@ -27,6 +123,8 @@ VALUES ('test0', 'FOO.EXAMPLE', 'password-00'),
        ('test4', 'FOO.EXAMPLE', 'password-04'),
        ('test5', 'FOO.EXAMPLE', 'password-05'),
        ('test0', 'BAR.EXAMPLE', 'password-06');
+$$);
+SELECT test.test_insert_PKs('test principal flags', $$
 INSERT INTO heimdal.principal_flags (name, realm, flag)
 VALUES ('test0', 'FOO.EXAMPLE', 'CLIENT'),
        ('test0', 'FOO.EXAMPLE', 'INITIAL'),
@@ -42,6 +140,8 @@ VALUES ('test0', 'FOO.EXAMPLE', 'CLIENT'),
        ('test5', 'FOO.EXAMPLE', 'INITIAL'),
        ('test0', 'BAR.EXAMPLE', 'CLIENT'),
        ('test0', 'BAR.EXAMPLE', 'INITIAL');
+$$);
+SELECT test.test_insert_PKs('test principal etypes', $$
 INSERT INTO heimdal.principal_etypes (name, realm, etype)
 VALUES ('test0', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
        ('test0', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
@@ -57,6 +157,8 @@ VALUES ('test0', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
        ('test5', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
        ('test0', 'BAR.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
        ('test0', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96');
+$$);
+SELECT test.test_insert_PKs('test members', $$
 INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
 VALUES ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'test0', 'PRINCIPAL', 'FOO.EXAMPLE'),
        ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'test1', 'PRINCIPAL', 'FOO.EXAMPLE'),
@@ -65,6 +167,8 @@ VALUES ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'test0', 'PRINCIPAL', 'FOO.EXAMPLE
        ('testgroup1', 'GROUP', 'FOO.EXAMPLE', 'test1', 'PRINCIPAL', 'FOO.EXAMPLE'),
        ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'test4', 'PRINCIPAL', 'FOO.EXAMPLE'),
        ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'test5', 'PRINCIPAL', 'FOO.EXAMPLE');
+$$);
+SELECT test.test_insert_PKs('test key creation', $$
 INSERT INTO heimdal.keys (name, container, realm, kvno, ktype, etype, key)
 VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0000'),
        ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x0100'),
@@ -108,7 +212,11 @@ VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sh
        ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1006'),
        ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1106'),
        ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1116');
+$$);
+SELECT test.expect_success('test update principal kvno', $$
 UPDATE heimdal.principals SET kvno = 3;
+$$);
+SELECT test.test_insert_PKs('test password_history', $$
 INSERT INTO heimdal.password_history (name, container, realm, etype, digest, digest_alg, mkvno)
 VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
        ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
@@ -124,6 +232,8 @@ VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x000
        ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
        ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
        ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2);
+$$);
+SELECT test.test_insert_PKs('test alias creation', $$
 INSERT INTO heimdal.aliases (name, realm, alias_name, alias_realm)
 VALUES ('test0', 'FOO.EXAMPLE', 'alias0',  'FOO.EXAMPLE'),
        ('test0', 'FOO.EXAMPLE', 'alias10', 'FOO.EXAMPLE'),
@@ -139,8 +249,9 @@ VALUES ('test0', 'FOO.EXAMPLE', 'alias0',  'FOO.EXAMPLE'),
        ('test5', 'FOO.EXAMPLE', 'alias15', 'FOO.EXAMPLE'),
        ('test0', 'BAR.EXAMPLE', 'alias0',  'BAR.EXAMPLE'),
        ('test0', 'BAR.EXAMPLE', 'alias10', 'BAR.EXAMPLE');
+$$);
 -- Use SELECTs here to check for incorrect results
-/*
+SELECT test.expect_success('test hdb views', $$
 SELECT * FROM hdb.modified_info WHERE name LIKE 'test0%';
 SELECT * FROM hdb.key WHERE name LIKE 'test0%';
 SELECT * FROM hdb.keyset WHERE name LIKE 'test0%';
@@ -150,83 +261,135 @@ SELECT * FROM hdb.pwh1 WHERE name LIKE 'test0%';
 SELECT * FROM hdb.pwh WHERE name LIKE 'test0%';
 SELECT * FROM hdb.flags WHERE name LIKE 'test0%';
 SELECT * FROM hdb.etypes WHERE name LIKE 'test0%';
- */
---SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
+SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
+$$);
+
+DROP TABLE IF EXISTS x;
 CREATE TEMP TABLE x AS
 SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
 
-UPDATE x SET display_name = 'testfoo@BAR.EXAMPLE', name = 'testfoo', realm = 'BAR.EXAMPLE',
+SELECT test.expect_success('test jsonb_set', $$
+UPDATE x SET name = 'testfoo', realm = 'BAR.EXAMPLE',
              entry = jsonb_set(jsonb_set(entry::jsonb, '{"name"}'::TEXT[], to_jsonb('testfoo'::TEXT))::jsonb,
                                '{"realm"}'::TEXT[], to_jsonb('BAR.EXAMPLE'::TEXT));
 
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",0,"alias_name"}'::TEXT[], to_jsonb('aliasfoo'::TEXT));
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",1,"alias_name"}'::TEXT[], to_jsonb('aliasfoo2'::TEXT));
+$$);
 
+SELECT test.test_insert_PKs('test hdb insert', $$
 INSERT INTO hdb.hdb
     (name, realm, entry)
 SELECT name, realm, entry FROM x;
+$$);
 
-UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"valid_end"}'::TEXT[], to_jsonb(current_timestamp + '50 years'::INTERVAL))
-WHERE name LIKE 'test0%';
+SELECT jsonb_set(entry::jsonb, '{"valid_end"}'::TEXT[], to_jsonb(('2019-06-17 19:34:58.514858'::TIMESTAMP WITHOUT TIME ZONE
+                                                                 + '50 years'::INTERVAL)::TEXT))
+from hdb.hdb
+where name = 'test0' AND realm like 'B%';
 
+SELECT test.check_hdb_hdb_jsonb_update('test hdb update valid_end', 'test0', 'BAR.EXAMPLE', $$
+                                       jsonb_set(entry::jsonb, '{"valid_end"}'::TEXT[],
+                                                 to_jsonb(('2019-06-17 19:34:58.514858'::TIMESTAMP WITHOUT TIME ZONE
+                                                           + '50 years'::INTERVAL)::TEXT))
+$$);
+
+SELECT entry FROM hdb.hdb WHERE name = 'test0' AND realm like 'B%';
+
+SELECT test.expect_success('test hdb update pw_end', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"pw_end"}'::TEXT[], to_jsonb(current_timestamp + '50 years'::INTERVAL))
 WHERE name LIKE 'test0%';
+$$);
 
+SELECT test.expect_success('test hdb update last_pw_change', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"last_pw_change"}'::TEXT[], to_jsonb(current_timestamp - '2 years'::INTERVAL))
 WHERE name LIKE 'test0%';
+$$);
 
+SELECT test.expect_success('test hdb update max_life', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"max_life"}'::TEXT[], to_jsonb('23 hours'::INTERVAL))
 WHERE name LIKE 'test0%';
+$$);
 
+SELECT test.expect_success('test hdb update max_renew', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"max_renew"}'::TEXT[], to_jsonb('69 days'::INTERVAL))
 WHERE name LIKE 'test0%';
+$$);
 
+SELECT test.expect_success('test hdb update password', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"password"}'::TEXT[], to_jsonb('foobarbaz'::TEXT))
 WHERE name LIKE 'test0%';
+$$);
 
+SELECT test.expect_success('test hdb update flags', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"flags"}'::text[], jsonb_build_array('CLIENT','SERVER'))
 WHERE name LIKE 'test0%';
+$$);
 
+SELECT test.expect_success('test hdb update etypes', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"etypes"}'::text[],
                                      jsonb_build_array('aes128-cts-hmac-sha1-96','aes256-cts-hmac-sha1-96',
                                                        'aes128-cts-hmac-sha256','aes256-cts-hmac-sha512'))
 WHERE name LIKE 'test0%';
+$$);
 
+SELECT test.expect_success('test hdb update aliases', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"aliases"}'::TEXT[],
                       jsonb_build_array(jsonb_build_object('alias_name','kahlui'::TEXT,
                                          'alias_realm','BAR.EXAMPLE'::TEXT),jsonb_build_object('alias_name','kentobento'::TEXT,
                                          'alias_realm','BAR.EXAMPLE'::TEXT)))
 WHERE name LIKE 'test0%' AND realm LIKE 'B%';
+$$);
 
+SELECT test.expect_success('test hdb update password_history', $$
 SELECT * from heimdal.password_history;
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"password_history",0,"digest"}'::TEXT[],
                       to_jsonb(encode(E'\\xA590','base64')))
-WHERE name = 'test0' and realm like 'B%';;
+WHERE name = 'test0' and realm like 'B%';
+$$);
 
+SELECT modified_at, kvno
+FROM heimdal.keys
+WHERE name = 'test0' AND realm LIKE 'B%'
+ORDER BY modified_at DESC, kvno DESC;
 
+SELECT test.expect_success('test hdb update keysets', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"keysets",0}'::TEXT[],
-                      jsonb_build_array(jsonb_build_object('key',E'\\x2222'::TEXT,
+                      jsonb_build_array(jsonb_build_object('key',encode(E'\\x2222','base64'),
                                                            'kvno',5::BIGINT,
                                                            'salt',NULL,
                                                            'etype','aes128-cts-hmac-sha1-96'::TEXT,
                                                            'ktype','SYMMETRIC'::TEXT,
                                                            'mkvno',NULL)))
-WHERE name LIKE 'test0%';
+WHERE name LIKE 'test4%';
+$$);
 
+SELECT modified_at, kvno
+FROM heimdal.keys
+WHERE name = 'test0' AND realm LIKE 'B%'
+ORDER BY modified_at DESC, kvno DESC;
+
+SELECT test.expect_success('test hdb update keys', $$
 UPDATE hdb.hdb SET entry = jsonb_set(entry::jsonb, '{"keys"}'::TEXT[],
-                      jsonb_build_array(jsonb_build_object('key',E'\\x1234'::TEXT,
+                      jsonb_build_array(jsonb_build_object('key',encode(E'\\x1234','base64'),
                                                            'kvno',1::BIGINT,
                                                            'salt',NULL,
                                                            'etype','aes128-cts-hmac-sha1-96'::TEXT,
                                                            'ktype','SYMMETRIC'::TEXT,
                                                            'mkvno',NULL)))
 WHERE name LIKE 'test0%';
+$$);
 
 DELETE FROM hdb.hdb WHERE name = 'testfoo';
 
 --SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
+DROP TABLE IF EXISTS y;
 CREATE TEMP TABLE y AS 
 SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
+
+SELECT CASE count(*) WHEN 0 THEN 'ALL TESTS PASS' ELSE 'SOME TESTS FAIL' END
+FROM test.tests
+WHERE NOT pass;
 
 /*
 SELECT jsonb_set(e.entry::jsonb, '{"keys"}'::TEXT[],

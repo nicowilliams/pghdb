@@ -620,18 +620,20 @@ DECLARE
     fields JSONB;
 BEGIN
     IF TG_OP = 'UPDATE' THEN
-        WITH new_keys AS (
-            SELECT (q.js->>'kvno'::text)::bigint AS kvno,
-                   decode(q.js->>'key', 'base64')::bytea AS key,
-                   (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
-                   (q.js->>'etype'::text)::heimdal.enc_type AS etype
+        WITH deletions AS (
+            SELECT kvno AS kvno, key AS key, ktype AS ktype, etype AS etype
+            FROM heimdal.keys k
+            WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL'
+            EXCEPT
+            SELECT (q.js->>'kvno'::text)::bigint,
+                   decode(q.js->>'key', 'base64')::bytea,
+                   (q.js->>'ktype'::text)::heimdal.key_type,
+                   (q.js->>'etype'::text)::heimdal.enc_type
             FROM (SELECT jsonb_array_elements(NEW.keys)) q(js))
         DELETE FROM heimdal.keys AS k
+        USING deletions d
         WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL' AND
-              NOT EXISTS (SELECT 1 FROM new_keys n
-                          WHERE n.name = k.name   AND n.realm = k.realm AND
-                                n.kvno = k.kvno   AND n.key = k.key AND
-                                n.ktype = k.ktype AND n.etype = k.etype);
+              k.kvno = d.kvno AND k.key = d.key AND k.ktype = d.ktype AND k.etype = d.etype;
     END IF;
     INSERT INTO heimdal.keys
         (name, container, realm, kvno, ktype, etype, key, salt, mkvno)
@@ -698,7 +700,7 @@ BEGIN
         /* Delete keysets that existed but don't appear in 'ext' -- they're getting dropped*/
         WITH new_keysets AS ( 
             SELECT (q.js->>'kvno'::text)::bigint AS kvno,
-                   (q.js->>'key'::text)::bytea AS key,
+                   decode(q.js->>'key', 'base64')::bytea AS key,
                    (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
                    (q.js->>'etype'::text)::heimdal.enc_type AS etype
             FROM (SELECT jsonb_array_elements(q.js)
@@ -716,7 +718,7 @@ BEGIN
         (name, container, realm, kvno, ktype, etype, key, salt, mkvno)
     SELECT NEW.name, 'PRINCIPAL', NEW.realm,
         (e.entry->>'kvno'::text)::bigint, (e.entry->>'ktype'::text)::heimdal.key_type,
-        (e.entry->>'etype'::text)::heimdal.enc_type, (e.entry->>'key'::text)::bytea,
+        (e.entry->>'etype'::text)::heimdal.enc_type, decode(e.entry->>'key', 'base64')::bytea,
         (e.entry->>'salt'::text)::heimdal.salt, (e.entry->>'mkvno'::text)::bigint
     FROM (SELECT jsonb_array_elements(e) FROM jsonb_array_elements(NEW.ext) e(e)) AS e(entry)
     ON CONFLICT DO NOTHING;
@@ -792,6 +794,7 @@ CREATE OR REPLACE FUNCTION hdb.instead_of_on_hdb_func()
 RETURNS TRIGGER AS $$
 DECLARE
     fields JSONB;
+    r      RECORD;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         IF OLD.display_name IS NULL THEN /* Return here -L */
@@ -965,6 +968,37 @@ BEGIN
     IF (fields IS NULL OR fields->'keydata' IS NOT NULL) AND
        OLD.entry->>'keys' <> NEW.entry->>'keys' THEN
         /* First delete keys that we're dropping in this update */
+        FOR r IN (
+            /* Here goes the query for deletions */
+                WITH new_keys AS (
+                /*
+                 * We don't care whether a key appears in NEW.entry->>'keys' or in
+                 * the keysets extension.
+                 */
+                SELECT NEW.name AS name, NEW.realm AS realm,
+                       (q.js->>'kvno'::text)::bigint AS kvno,
+                       decode(q.js->>'key', 'base64')::bytea AS key,
+                       (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
+                       (q.js->>'etype'::text)::heimdal.enc_type AS etype
+                FROM (SELECT jsonb_array_elements((NEW.entry)->'keys')) q(js)
+                UNION
+                SELECT NEW.name AS name, NEW.realm AS realm,
+                       (q.js->>'kvno'::text)::bigint AS kvno,
+                       decode(q.js->>'key', 'base64')::bytea AS key,
+                       (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
+                       (q.js->>'etype'::text)::heimdal.enc_type AS etype
+                FROM (SELECT jsonb_array_elements(q.js)
+                      FROM (SELECT jsonb_array_elements(NEW.entry->'keysets')) q(js)) q(js))
+            SELECT * FROM heimdal.keys AS k
+            WHERE k.name = NEW.name AND k.realm = NEW.realm AND container = 'PRINCIPAL' AND
+                  NOT EXISTS (SELECT 1 FROM new_keys n
+                              WHERE n.name = k.name   AND n.realm = k.realm AND
+                                    n.kvno = k.kvno   AND n.key = k.key AND
+                                    n.ktype = k.ktype AND n.etype = k.etype)
+        ) LOOP
+            RAISE NOTICE 'Deleting % from heimdal.keys for update of % at %',
+                         r, NEW.name, NEW.realm;
+        END LOOP;
         WITH new_keys AS (
             /*
              * We don't care whether a key appears in NEW.entry->>'keys' or in
@@ -972,14 +1006,14 @@ BEGIN
              */
             SELECT NEW.name AS name, NEW.realm AS realm,
                    (q.js->>'kvno'::text)::bigint AS kvno,
-                   (q.js->>'key'::text)::bytea AS key,
+                   decode(q.js->>'key', 'base64')::bytea AS key,
                    (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
                    (q.js->>'etype'::text)::heimdal.enc_type AS etype
             FROM (SELECT jsonb_array_elements((NEW.entry)->'keys')) q(js)
-            UNION ALL
+            UNION
             SELECT NEW.name AS name, NEW.realm AS realm,
                    (q.js->>'kvno'::text)::bigint AS kvno,
-                   (q.js->>'key'::text)::bytea AS key,
+                   decode(q.js->>'key', 'base64')::bytea AS key,
                    (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
                    (q.js->>'etype'::text)::heimdal.enc_type AS etype
             FROM (SELECT jsonb_array_elements(q.js)
@@ -1005,7 +1039,7 @@ BEGIN
                (q.js->>'etype'::text)::heimdal.enc_type,
                (q.js->>'salt'::text)::heimdal.salt,
                (q.js->>'mkvno'::text)::bigint,
-               (q.js->>'key'::text)::bytea
+               decode(q.js->>'key', 'base64')::bytea
         FROM (SELECT jsonb_array_elements((NEW.entry)->'keys')) q(js)
         UNION ALL
         SELECT NEW.name, 'PRINCIPAL'::heimdal.containers, NEW.realm,
@@ -1014,7 +1048,7 @@ BEGIN
                (q.js->>'etype'::text)::heimdal.enc_type,
                (q.js->>'salt'::text)::heimdal.salt,
                (q.js->>'mkvno'::text)::bigint,
-               (q.js->>'key'::text)::bytea
+               decode(q.js->>'key', 'base64')::bytea
         FROM (SELECT jsonb_array_elements(q.js)
               FROM (SELECT jsonb_array_elements(NEW.entry->'keysets')) q(js)) q(js)
         ON CONFLICT DO NOTHING;
@@ -1062,8 +1096,7 @@ BEGIN
                     FROM (SELECT kvno AS kvno
                           FROM heimdal.keys k
                           WHERE k.name = NEW.name AND k.realm = NEW.realm AND k.container = 'PRINCIPAL'
-                          ORDER BY modified_at DESC, kvno DESC
-                          LIMIT 1) q
+                          ORDER BY modified_at DESC, kvno DESC LIMIT 1) q
                     ORDER BY 1 DESC LIMIT 1) q)
             WHERE p.name = NEW.name AND p.realm = NEW.realm AND p.container = 'PRINCIPAL';
         END IF;
