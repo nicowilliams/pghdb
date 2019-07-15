@@ -115,6 +115,19 @@ PG-Heimdal LTE: Long-term Evolution
 
  - become UName\*It 3.0.
 
+    - develop an extension for doing table inheritance correctly
+
+      Among other things this will include alternative FK support so
+      that one can properly reference rows from some table and its
+      derivatives, even if we choose to use VIEWs to represent "virtual
+      classes".  (This is the "attribute domain" part of UName\*It.)
+
+    - develop an extension for UName\*It-style namespace tables
+
+   The current heimdal.entities table conflates both of the above in an
+   entirely manual way and a bit simplistically.  These two extensions
+   will address that and more.
+
  - multi-master support
 
    A normalized schema makes conflict resolution much simpler.  We could
