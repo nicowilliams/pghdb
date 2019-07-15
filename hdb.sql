@@ -187,10 +187,34 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hepk     PRIMARY KEY (name, container, realm),
     CONSTRAINT hepk2    UNIQUE (id),
+                        /* hepk3 is just for denormalzation of entity_type via FKs */
+    CONSTRAINT hepk3    UNIQUE (name, container, realm, entity_type),
     CONSTRAINT hefkp    FOREIGN KEY (policy)
                         REFERENCES heimdal.policies (name)
                         ON DELETE SET NULL
                         ON UPDATE CASCADE
+);
+
+CREATE UNIQUE INDEX ON heimdal.entities (name, container, realm, entity_type);
+
+CREATE TABLE IF NOT EXISTS heimdal.groups (
+    display_name        TEXT,
+    name                TEXT,
+    container           heimdal.containers,
+    realm               TEXT,
+    entity_type         heimdal.entity_types NOT NULL
+                        DEFAULT ('GROUP')
+                        CHECK (entity_type = 'GROUP')
+);
+
+CREATE TABLE IF NOT EXISTS heimdal.users (
+    display_name        TEXT,
+    name                TEXT,
+    container           heimdal.containers,
+    realm               TEXT,
+    entity_type         heimdal.entity_types NOT NULL
+                        DEFAULT ('USER')
+                        CHECK (entity_type = 'USER')
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.principals (
@@ -203,6 +227,9 @@ CREATE TABLE IF NOT EXISTS heimdal.principals (
     name_type           heimdal.kerberos_name_type
                         DEFAULT ('UNKNOWN'),
     /* flags and etypes are stored separately */
+    entity_type         heimdal.entity_types NOT NULL
+                        DEFAULT ('PRINCIPAL')
+                        CHECK (entity_type = 'PRINCIPAL'),
     kvno                BIGINT DEFAULT (1),
     pw_life             INTERVAL DEFAULT ('90 days'::interval),
     pw_end              TIMESTAMP WITHOUT TIME ZONE
@@ -214,8 +241,8 @@ CREATE TABLE IF NOT EXISTS heimdal.principals (
     password            TEXT, /* very much optional, mostly unused XXX make binary, encrypted */
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hppk     PRIMARY KEY (name, container, realm),
-    CONSTRAINT hpfka    FOREIGN KEY (name, container, realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hpfka    FOREIGN KEY (name, container, realm, entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
@@ -256,20 +283,25 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_flags(
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.members (
-    parent_name      TEXT,
-    parent_container heimdal.containers,
-    parent_realm     TEXT,
+    parent_name         TEXT,
+    parent_container    heimdal.containers,
+    parent_realm        TEXT,
+    parent_entity_type  heimdal.entity_types NOT NULL
+                        DEFAULT ('GROUP')
+                        CHECK (parent_entity_type = 'GROUP'),
     member_name         TEXT,
     member_container    heimdal.containers,
     member_realm        TEXT,
+    member_entity_type  heimdal.entity_types NOT NULL
+                        CHECK (member_entity_type = 'USER' OR member_entity_type = 'GROUP'),
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hmpk     PRIMARY KEY (parent_name, parent_container, parent_realm, member_name, member_container, member_realm),
-    CONSTRAINT hmfkc    FOREIGN KEY (parent_name, parent_container, parent_realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hmfkc    FOREIGN KEY (parent_name, parent_container, parent_realm, parent_entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
-    CONSTRAINT hmfkm    FOREIGN KEY (member_name, member_container, member_realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hmfkm    FOREIGN KEY (member_name, member_container, member_realm, member_entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
@@ -310,19 +342,25 @@ CREATE TABLE IF NOT EXISTS heimdal.aliases (
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
     realm               TEXT,
+    entity_type         heimdal.entity_types
+                        DEFAULT ('PRINCIPAL')
+                        CHECK (entity_type = 'PRINCIPAL'),
     alias_name          TEXT,
     alias_container     heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
     alias_realm         TEXT,
+    alias_entity_type   heimdal.entity_types
+                        DEFAULT ('PRINCIPAL')
+                        CHECK (alias_entity_type = 'PRINCIPAL'),
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hapk1    PRIMARY KEY (name, container, realm, alias_name, alias_container, alias_realm),
-    CONSTRAINT hafk1    FOREIGN KEY (alias_name, alias_container, alias_realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hafk1    FOREIGN KEY (alias_name, alias_container, alias_realm, alias_entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
-    CONSTRAINT hafk2    FOREIGN KEY (name, container, realm)
-                        REFERENCES heimdal.principals (name, container, realm)
+    CONSTRAINT hafk2    FOREIGN KEY (name, container, realm, entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
@@ -391,6 +429,10 @@ SELECT
     k.name AS name, k.realm AS realm, k.kvno AS kvno,
     jsonb_build_object('ktype',k.ktype::text,
                        'etype',k.etype::text,
+                       'set_at',
+                            CASE coalesce(current_setting('hdb.test',true), 'false')
+                            WHEN 'true' THEN k.created_at::text
+                            ELSE '1970-01-01 00:00:00'::timestamp without time zone::text END,
                        'kvno',k.kvno::bigint,
                        'mkvno',k.mkvno::bigint,
                        'salt',k.salt::text,
@@ -400,13 +442,13 @@ WHERE k.enabled AND k.valid_start <= current_timestamp AND
       k.valid_end > current_timestamp;
 
 CREATE OR REPLACE VIEW hdb.keyset AS
-SELECT ks.name AS name, ks.realm AS realm, ks.kvno AS kvno, jsonb_agg(ks.key) AS keys
+SELECT ks.name AS name, ks.realm AS realm, ks.kvno AS kvno, jsonb_agg(ks.key ORDER BY ks.key) AS keys
 FROM hdb.key ks
 GROUP BY ks.name, ks.realm, ks.kvno;
 
 CREATE OR REPLACE VIEW hdb.keysets AS
 SELECT ks.name AS name, ks.realm AS realm, 'keysets' AS extname,
-       jsonb_agg(ks.keys) AS ext
+       jsonb_agg(ks.keys ORDER BY ks.keys) AS ext
 FROM hdb.keyset ks
 WHERE NOT EXISTS (SELECT 1 FROM heimdal.principals p WHERE p.name = ks.name AND p.realm = ks.realm AND p.kvno = ks.kvno)
 GROUP BY ks.name, ks.realm;
@@ -414,7 +456,7 @@ GROUP BY ks.name, ks.realm;
 CREATE OR REPLACE VIEW hdb.aliases AS
 SELECT a.name AS name, a.realm AS realm, 'aliases' AS extname,
        jsonb_agg(jsonb_build_object('alias_name',a.alias_name,
-                                    'alias_realm',a.alias_realm)) AS ext
+                                    'alias_realm',a.alias_realm) ORDER BY a.alias_name, a.alias_realm) AS ext
 FROM heimdal.aliases a
 WHERE container = 'PRINCIPAL'
 GROUP BY a.name, a.realm;
@@ -425,12 +467,16 @@ SELECT p.name AS name, p.realm AS realm,
                           'etype',p.etype::text,
                           'digest_alg',p.digest_alg::text,
                           'digest',encode(p.digest, 'base64'),
-                          'set_at',p.created_at::text) AS old_password
+                          'set_at',
+                            CASE coalesce(current_setting('hdb.test',true), 'false')
+                            WHEN 'true' THEN p.created_at::text
+                            ELSE '1970-01-01 00:00:00'::timestamp without time zone::text END
+                          ) AS old_password
 FROM heimdal.password_history p;
 
 CREATE OR REPLACE VIEW hdb.pwh AS
 SELECT p1.name AS name, p1.realm AS realm, 'password_history' AS extname,
-       jsonb_agg(p1.old_password) AS ext
+       jsonb_agg(p1.old_password ORDER BY p1.old_password) AS ext
 FROM hdb.pwh1 p1
 GROUP BY p1.name, p1.realm;
 
@@ -444,13 +490,13 @@ GROUP BY p1.name, p1.realm;
  */
 
 CREATE OR REPLACE VIEW hdb.flags AS
-SELECT p.name AS name, p.realm AS realm, jsonb_agg(p.flag::text) AS flags
+SELECT p.name AS name, p.realm AS realm, jsonb_agg(p.flag::text ORDER BY p.flag) AS flags
 FROM heimdal.principal_flags p
 WHERE valid_end > current_timestamp
 GROUP BY p.name, p.realm;
 
 CREATE OR REPLACE VIEW hdb.etypes AS
-SELECT p.name AS name, p.realm AS realm, jsonb_agg(p.etype::text) AS etypes
+SELECT p.name AS name, p.realm AS realm, jsonb_agg(p.etype::text ORDER BY p.etype) AS etypes
 FROM heimdal.principal_etypes p
 WHERE valid_end > current_timestamp
 GROUP BY p.name, p.realm;
@@ -547,6 +593,11 @@ EXECUTE FUNCTION heimdal.trigger_on_entities_func();
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_principals_func()
 RETURNS TRIGGER AS $$
 BEGIN
+    INSERT INTO heimdal.entities
+        (name, realm, container, entity_type)
+    SELECT NEW.name, NEW.realm, 'PRINCIPAL', 'PRINCIPAL'
+    ON CONFLICT DO NOTHING;
+    
     NEW.display_name := (
         SELECT e.display_name FROM heimdal.entities e WHERE e.name = NEW.name AND
                                                             e.realm = NEW.realm AND
@@ -620,6 +671,7 @@ DECLARE
     fields JSONB;
 BEGIN
     IF TG_OP = 'UPDATE' THEN
+        /* XXXX This is dead code because we never update this view */
         WITH deletions AS (
             SELECT kvno AS kvno, key AS key, ktype AS ktype, etype AS etype
             FROM heimdal.keys k
@@ -660,6 +712,7 @@ RETURNS TRIGGER AS $$
 BEGIN
     IF TG_OP = 'UPDATE' THEN
         /* Delete aliases that existed but don't appear in 'ext' -- they're getting dropped*/
+        /* XXX call this deletions, do the select EXCEPT select thing we do for pwh */
         WITH new_aliases AS (
             -- New aliases
             SELECT (q.js->>'alias_name') AS alias_name,
@@ -734,29 +787,29 @@ EXECUTE FUNCTION hdb.instead_of_on_keysets_func();
 CREATE OR REPLACE FUNCTION hdb.instead_of_on_pwh_func()
 RETURNS TRIGGER AS $$
 BEGIN
-    RAISE NOTICE '% % %', TG_OP, TG_TABLE_NAME, NEW;
     IF TG_OP = 'UPDATE' THEN
         /* Delete aliases that existed but don't appear in 'ext' -- they're getting dropped*/
         WITH deletions AS (
+                /* Old entries... */
                 SELECT (p.js->>'digest_alg'::text)::heimdal.digest_type AS digest_alg,
                        (p.js->>'digest') AS digest,
                        (p.js->>'etype'::text)::heimdal.enc_type AS etype,
-                       (p.js->>'mkvno'::text)::bigint AS mkvno,
-                       (p.js->>'set_at'::text)::text AS set_at
+                       (p.js->>'mkvno'::text)::bigint AS mkvno
                 FROM (SELECT jsonb_array_elements(ext)
                       FROM hdb.pwh p
                       WHERE p.name = NEW.name AND p.realm = NEW.realm) p(js)
             EXCEPT
-                SELECT (q.js->>'digest_alg'::text)::heimdal.digest_type AS digest_alg,
-                       (q.js->>'digest') AS digest,
-                       (q.js->>'etype'::text)::heimdal.enc_type AS etype,
-                       (q.js->>'mkvno'::text)::bigint AS mkvno,
-                       (q.js->>'set_at'::text)::text AS set_at
-                FROM jsonb_array_elements(NEW.ext) q(js))
+                /* minus new entries == entries to delete */
+                SELECT (p.js->>'digest_alg'::text)::heimdal.digest_type AS digest_alg,
+                       (p.js->>'digest') AS digest,
+                       (p.js->>'etype'::text)::heimdal.enc_type AS etype,
+                       (p.js->>'mkvno'::text)::bigint AS mkvno
+                FROM jsonb_array_elements(NEW.ext) p(js))
         DELETE FROM heimdal.password_history AS p
         USING deletions AS d
         WHERE p.name = NEW.name AND p.realm = NEW.realm /* XXX this assumes this trigger runs after cascades */ AND
               p.container = 'PRINCIPAL' AND
+              p.mkvno = d.mkvno AND
               p.digest_alg = d.digest_alg AND
               p.digest = decode(d.digest,'base64')::bytea;
     END IF;
@@ -776,10 +829,11 @@ BEGIN
             FROM (SELECT jsonb_array_elements(ext)
                   FROM hdb.pwh p
                   WHERE p.name = NEW.name AND p.realm = NEW.realm) p(js))
-    INSERT INTO heimdal.password_history (name, container, realm, etype, digest_alg, digest, mkvno)
+    INSERT INTO heimdal.password_history (name, container, realm, etype, digest_alg, digest, mkvno, created_at)
     SELECT NEW.name, 'PRINCIPAL', NEW.realm, a.etype, a.digest_alg,
-           decode(a.digest, 'base64')::bytea, a.mkvno
+           decode(a.digest, 'base64')::bytea, a.mkvno, coalesce(p.created_at, current_timestamp)
     FROM additions a
+    LEFT JOIN heimdal.password_history p ON p.name = NEW.name AND p.realm = NEW.realm
     ON CONFLICT DO NOTHING;
     RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
@@ -954,7 +1008,7 @@ BEGIN
         OLD.entry->'aliases' <> NEW.entry->'aliases' THEN
         UPDATE hdb.aliases
         SET ext = NEW.entry->'aliases'
-        WHERE name = (NEW.entry)->>'name' AND realm = (NEw.entry)->>'realm';
+        WHERE name = (NEW.entry)->>'name' AND realm = (NEW.entry)->>'realm';
     END IF;
 
     IF (fields IS NULL OR fields->'password_history' IS NOT NULL) AND
@@ -965,40 +1019,11 @@ BEGIN
     END IF;
 
     /* Update the keys for the principal.  This is a doozy */
-    IF (fields IS NULL OR fields->'keydata' IS NOT NULL) AND
-       OLD.entry->>'keys' <> NEW.entry->>'keys' THEN
+    IF ((fields IS NULL OR fields->'keydata' IS NOT NULL) AND
+       OLD.entry->>'keys' <> NEW.entry->>'keys') OR
+       ((fields IS NULL OR fields->'keysets' IS NOT NULL) AND
+       OLD.entry->>'keysets' <> NEW.entry->>'keysets') THEN
         /* First delete keys that we're dropping in this update */
-        FOR r IN (
-            /* Here goes the query for deletions */
-                WITH new_keys AS (
-                /*
-                 * We don't care whether a key appears in NEW.entry->>'keys' or in
-                 * the keysets extension.
-                 */
-                SELECT NEW.name AS name, NEW.realm AS realm,
-                       (q.js->>'kvno'::text)::bigint AS kvno,
-                       decode(q.js->>'key', 'base64')::bytea AS key,
-                       (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
-                       (q.js->>'etype'::text)::heimdal.enc_type AS etype
-                FROM (SELECT jsonb_array_elements((NEW.entry)->'keys')) q(js)
-                UNION
-                SELECT NEW.name AS name, NEW.realm AS realm,
-                       (q.js->>'kvno'::text)::bigint AS kvno,
-                       decode(q.js->>'key', 'base64')::bytea AS key,
-                       (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
-                       (q.js->>'etype'::text)::heimdal.enc_type AS etype
-                FROM (SELECT jsonb_array_elements(q.js)
-                      FROM (SELECT jsonb_array_elements(NEW.entry->'keysets')) q(js)) q(js))
-            SELECT * FROM heimdal.keys AS k
-            WHERE k.name = NEW.name AND k.realm = NEW.realm AND container = 'PRINCIPAL' AND
-                  NOT EXISTS (SELECT 1 FROM new_keys n
-                              WHERE n.name = k.name   AND n.realm = k.realm AND
-                                    n.kvno = k.kvno   AND n.key = k.key AND
-                                    n.ktype = k.ktype AND n.etype = k.etype)
-        ) LOOP
-            RAISE NOTICE 'Deleting % from heimdal.keys for update of % at %',
-                         r, NEW.name, NEW.realm;
-        END LOOP;
         WITH new_keys AS (
             /*
              * We don't care whether a key appears in NEW.entry->>'keys' or in
