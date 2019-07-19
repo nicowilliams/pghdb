@@ -36,6 +36,32 @@ WHEN OTHERS THEN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION test.expect_true(_testname TEXT, func TEXT)
+RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
+BEGIN
+    EXECUTE format($q$
+        INSERT INTO test.tests (testname, pass)
+        SELECT %1$L, %2$s
+        $q$, _testname, func);
+    RETURN pass
+    FROM test.tests t
+    WHERE t.testname = _testname;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION test.expect_false(_testname TEXT, func TEXT)
+RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
+BEGIN
+    EXECUTE format($q$
+        INSERT INTO test.tests (testname, pass)
+        SELECT %1$L, NOT %2$s
+        $q$, _testname, func);
+    RETURN pass 
+    FROM test.tests t
+    WHERE t.testname = _testname;
+END;
+$$;
+
 DROP TABLE IF EXISTS test_hdb_hdb_entry_update;
 CREATE TEMP TABLE IF NOT EXISTS test_hdb_hdb_entry_update
     (testname TEXT, name TEXT, realm TEXT, entry JSONB);
@@ -63,14 +89,14 @@ BEGIN
         SET entry = %3$s
         WHERE name = %1$L AND realm = %2$L
         $q$, _name, _realm, _code);
-
+/*
     RAISE NOTICE 'check hdb hdb jsonb update here: %', (
         SELECT row(hdb.entry = t.entry, hdb.entry, t.entry)
         FROM hdb.hdb hdb
         JOIN pg_temp.test_hdb_hdb_entry_update t USING (name, realm)
         WHERE name = _name AND realm = _realm AND t.testname = _testname
     );
-    
+    */
     DELETE FROM test.tests WHERE testname = _testname;
     INSERT INTO test.tests (testname, pass)
     SELECT testname, hdb.entry = t.entry
@@ -116,16 +142,18 @@ WHERE name like 'test%';
 -- INSERT test data here
 SELECT 'test entity creation',
        test.test_insert_PKs('test entity creation', $$
-INSERT INTO heimdal.entities (name, realm, container, entity_type)
-VALUES ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
-       ('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
-       ('testgroup2', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
-       ('user0', 'FOO.EXAMPLE', 'USER', 'USER'),
-       ('user1', 'FOO.EXAMPLE', 'USER', 'USER'),
-       ('user2', 'FOO.EXAMPLE', 'USER', 'USER'),
-       ('user3', 'FOO.EXAMPLE', 'USER', 'USER'),
-       ('user4', 'FOO.EXAMPLE', 'USER', 'USER'),
-       ('user5', 'FOO.EXAMPLE', 'USER', 'USER');
+INSERT INTO heimdal.entities (name, realm, container, entity_type, owner_name, owner_realm, owner_container, owner_entity_type)
+VALUES ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup1', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup2', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup2', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup3', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup3', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('user0', 'FOO.EXAMPLE', 'USER', 'USER', 'user0', 'FOO.EXAMPLE', 'USER', 'USER'),
+       ('user1', 'FOO.EXAMPLE', 'USER', 'USER', 'user1', 'FOO.EXAMPLE', 'USER', 'USER'),
+       ('user2', 'FOO.EXAMPLE', 'USER', 'USER', 'user2', 'FOO.EXAMPLE', 'USER', 'USER'),
+       ('user3', 'FOO.EXAMPLE', 'USER', 'USER', 'user3', 'FOO.EXAMPLE', 'USER', 'USER'),
+       ('user4', 'FOO.EXAMPLE', 'USER', 'USER', 'user4', 'FOO.EXAMPLE', 'USER', 'USER'),
+       ('user5', 'FOO.EXAMPLE', 'USER', 'USER', 'user5', 'FOO.EXAMPLE', 'USER', 'USER'),
+       ('user0', 'BAR.EXAMPLE', 'USER', 'USER', 'user0', 'BAR.EXAMPLE', 'USER', 'USER');
 $$);
 SELECT 'test principal insertion',
        test.test_insert_PKs('test principal insertion', $$
@@ -136,7 +164,58 @@ VALUES ('test0', 'FOO.EXAMPLE', 'password-00'),
        ('test3', 'FOO.EXAMPLE', 'password-03'),
        ('test4', 'FOO.EXAMPLE', 'password-04'),
        ('test5', 'FOO.EXAMPLE', 'password-05'),
-       ('test0', 'BAR.EXAMPLE', 'password-06');
+       ('test6', 'FOO.EXAMPLE', 'password-06'),
+       ('test7', 'FOO.EXAMPLE', 'password-07'),
+       ('test8', 'FOO.EXAMPLE', 'password-08'),
+       ('test9', 'FOO.EXAMPLE', 'password-09'),
+       ('test0', 'BAR.EXAMPLE', 'password-10');
+$$);
+SELECT 'test entity owner update',
+       test.expect_success('test entity owner update', $$
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('user0', 'FOO.EXAMPLE', 'USER', 'USER')
+WHERE name = 'test0' AND realm LIKE 'F%';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('user0', 'FOO.EXAMPLE', 'USER', 'USER')
+WHERE name = 'test0' AND realm LIKE 'B%';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('user1', 'FOO.EXAMPLE', 'USER', 'USER')
+WHERE name = 'test1';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('user2', 'FOO.EXAMPLE', 'USER', 'USER')
+WHERE name = 'test2';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('user3', 'FOO.EXAMPLE', 'USER', 'USER')
+WHERE name = 'test3';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('user4', 'FOO.EXAMPLE', 'USER', 'USER')
+WHERE name = 'test4';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('user5', 'FOO.EXAMPLE', 'USER', 'USER')
+WHERE name = 'test5';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP')
+WHERE name = 'test6';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'GROUP')
+WHERE name = 'test7';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('testgroup2', 'FOO.EXAMPLE', 'GROUP', 'GROUP')
+WHERE name = 'test8';
+UPDATE heimdal.entities
+SET (owner_name, owner_realm, owner_container, owner_entity_type)
+  = ('testgroup3', 'FOO.EXAMPLE', 'GROUP', 'GROUP')
+WHERE name = 'test9';
 $$);
 SELECT 'test principal flags',
        test.test_insert_PKs('test principal flags', $$
@@ -153,6 +232,14 @@ VALUES ('test0', 'FOO.EXAMPLE', 'CLIENT'),
        ('test4', 'FOO.EXAMPLE', 'INITIAL'),
        ('test5', 'FOO.EXAMPLE', 'CLIENT'),
        ('test5', 'FOO.EXAMPLE', 'INITIAL'),
+       ('test6', 'FOO.EXAMPLE', 'CLIENT'),
+       ('test6', 'FOO.EXAMPLE', 'INITIAL'),
+       ('test7', 'FOO.EXAMPLE', 'CLIENT'),
+       ('test7', 'FOO.EXAMPLE', 'INITIAL'),
+       ('test8', 'FOO.EXAMPLE', 'CLIENT'),
+       ('test8', 'FOO.EXAMPLE', 'INITIAL'),
+       ('test9', 'FOO.EXAMPLE', 'CLIENT'),
+       ('test9', 'FOO.EXAMPLE', 'INITIAL'),
        ('test0', 'BAR.EXAMPLE', 'CLIENT'),
        ('test0', 'BAR.EXAMPLE', 'INITIAL');
 $$);
@@ -171,6 +258,14 @@ VALUES ('test0', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
        ('test4', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
        ('test5', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
        ('test5', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('test6', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('test6', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('test7', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('test7', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('test8', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('test8', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
+       ('test9', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
+       ('test9', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96'),
        ('test0', 'BAR.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
        ('test0', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96');
 $$);
@@ -183,7 +278,9 @@ VALUES ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user0', 'USER', 'FOO.EXAMPLE', 'U
        ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user3', 'USER', 'FOO.EXAMPLE', 'USER'),
        ('testgroup1', 'GROUP', 'FOO.EXAMPLE', 'user1', 'USER', 'FOO.EXAMPLE', 'USER'),
        ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'user4', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'user5', 'USER', 'FOO.EXAMPLE', 'USER');
+       ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'user5', 'USER', 'FOO.EXAMPLE', 'USER'),
+       ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup1', 'GROUP', 'FOO.EXAMPLE', 'GROUP'),
+       ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup2', 'GROUP', 'FOO.EXAMPLE', 'GROUP');
 $$);
 SELECT 'test key creation',
        test.test_insert_PKs('test key creation', $$
@@ -206,9 +303,21 @@ VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sh
        ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0005'),
        ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0105'),
        ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0115'),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0006'),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0106'),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0116'),
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0006'),
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0106'),
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0116'),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0007'),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0107'),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0117'),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0008'),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0108'),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0118'),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0009'),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0109'),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x0119'),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x2000'),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x2100'),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x2110'),
        ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x1000'),
        ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x1100'),
        ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes256-cts-hmac-sha1-96', E'\\x1110'),
@@ -227,9 +336,21 @@ VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sh
        ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1005'),
        ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1105'),
        ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1115'),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1006'),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1106'),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1116');
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1006'),
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1106'),
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1116'),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1007'),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1107'),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1117'),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1008'),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1108'),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1118'),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1009'),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1109'),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x1119'),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 1, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x3000'),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 2, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x3100'),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 3, 'SYMMETRIC', 'aes128-cts-hmac-sha1-96', E'\\x3110');
 $$);
 SELECT 'test update principal kvno',
        test.expect_success('test update principal kvno', $$
@@ -238,20 +359,28 @@ $$);
 SELECT 'test password_history',
        test.test_insert_PKs('test password_history', $$
 INSERT INTO heimdal.password_history (name, container, realm, etype, digest, digest_alg, mkvno)
-VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
-       ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
-       ('test1', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
-       ('test1', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
-       ('test2', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
-       ('test2', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
-       ('test3', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
-       ('test3', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
-       ('test4', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
-       ('test4', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
-       ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
-       ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 1),
-       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0005', 'sha1', 2);
+VALUES ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x8265', 'sha1', 1),
+       ('test0', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x8275', 'sha1', 2),
+       ('test1', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x1740', 'sha1', 1),
+       ('test1', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x7365', 'sha1', 2),
+       ('test2', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x0275', 'sha1', 1),
+       ('test2', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x3558', 'sha1', 2),
+       ('test3', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x9933', 'sha1', 1),
+       ('test3', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96', E'\\x1737', 'sha1', 2),
+       ('test4', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0998', 'sha1', 1),
+       ('test4', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x1754', 'sha1', 2),
+       ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x1758', 'sha1', 1),
+       ('test5', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x2431', 'sha1', 2),
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x0786', 'sha1', 1),
+       ('test6', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x4298', 'sha1', 2),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x1446', 'sha1', 1),
+       ('test7', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x6533', 'sha1', 2),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x5411', 'sha1', 1),
+       ('test8', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x7441', 'sha1', 2),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x8254', 'sha1', 1),
+       ('test9', 'PRINCIPAL', 'FOO.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x9254', 'sha1', 2),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x9763', 'sha1', 1),
+       ('test0', 'PRINCIPAL', 'BAR.EXAMPLE', 'aes256-cts-hmac-sha1-96', E'\\x7125', 'sha1', 2);
 $$);
 SELECT 'test alias creation',
        test.test_insert_PKs('test alias creation', $$
@@ -268,6 +397,14 @@ VALUES ('test0', 'FOO.EXAMPLE', 'alias0',  'FOO.EXAMPLE'),
        ('test4', 'FOO.EXAMPLE', 'alias14', 'FOO.EXAMPLE'),
        ('test5', 'FOO.EXAMPLE', 'alias5',  'FOO.EXAMPLE'),
        ('test5', 'FOO.EXAMPLE', 'alias15', 'FOO.EXAMPLE'),
+       ('test6', 'FOO.EXAMPLE', 'alias6',  'FOO.EXAMPLE'),
+       ('test6', 'FOO.EXAMPLE', 'alias16', 'FOO.EXAMPLE'),
+       ('test7', 'FOO.EXAMPLE', 'alias7',  'FOO.EXAMPLE'),
+       ('test7', 'FOO.EXAMPLE', 'alias17', 'FOO.EXAMPLE'),
+       ('test8', 'FOO.EXAMPLE', 'alias8',  'FOO.EXAMPLE'),
+       ('test8', 'FOO.EXAMPLE', 'alias18', 'FOO.EXAMPLE'),
+       ('test9', 'FOO.EXAMPLE', 'alias9',  'FOO.EXAMPLE'),
+       ('test9', 'FOO.EXAMPLE', 'alias19', 'FOO.EXAMPLE'),
        ('test0', 'BAR.EXAMPLE', 'alias0',  'BAR.EXAMPLE'),
        ('test0', 'BAR.EXAMPLE', 'alias10', 'BAR.EXAMPLE');
 $$);
@@ -298,6 +435,56 @@ UPDATE x SET name = 'testfoo', realm = 'BAR.EXAMPLE',
 
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",0,"alias_name"}'::TEXT[], to_jsonb('aliasfoo'::TEXT));
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",1,"alias_name"}'::TEXT[], to_jsonb('aliasfoo2'::TEXT));
+$$);
+
+SELECT 'test ownership user->user',
+        test.expect_true('test ownership user->user', $$
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'user0', 'FOO.EXAMPLE', 'USER')
+$$);
+
+SELECT 'test ownership user->principal',
+        test.expect_true('test ownership user->principal', $$
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'test0', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership user->principal via membership 2 levels',
+        test.expect_true('test ownership user->principal via membership 2 levels', $$
+heimdal.chk('user1', 'FOO.EXAMPLE', 'USER', 'test9', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership group->principal via membership 1 level',
+        test.expect_true('test ownership group->principal via membership 1 level', $$
+heimdal.chk('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'test9', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership group->principal',
+        test.expect_true('test ownership group->principal', $$
+heimdal.chk('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'test7', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership user->principal not owned',
+        test.expect_false('test ownership user->principal not owned', $$
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'test9', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership group->principal not owned',
+        test.expect_false('test ownership group->principal not owned', $$
+heimdal.chk('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'test9', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership user_not_exists->principal',
+        test.expect_false('test ownership user_not_exists->principal', $$
+heimdal.chk('user_not_exists', 'FOO.EXAMPLE', 'USER', 'test9', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership user->principal_not_exists',
+        test.expect_false('test ownership user->principal_not_exists', $$
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'principal_not_exists', 'FOO.EXAMPLE', 'PRINCIPAL')
+$$);
+
+SELECT 'test ownership user_not_exists->principal_not_exists',
+        test.expect_false('test ownership user_not_exists->principal_not_exists', $$
+heimdal.chk('user_not_exists', 'FOO.EXAMPLE', 'USER', 'principal_not_exists', 'FOO.EXAMPLE', 'PRINCIPAL')
 $$);
 
 SELECT 'test hdb insert',
@@ -372,7 +559,7 @@ SELECT 'test hdb update aliases',
                                                                        'alias_realm','BAR.EXAMPLE'::TEXT)))
 $$);
 
-SELECT jsonb_set(entry::jsonb, '{"password_history",1}'::TEXT[],
+SELECT jsonb_set(entry::jsonb, '{"password_history",0}'::TEXT[],
                                                  jsonb_build_object('mkvno',69::BIGINT,
                                                                     'etype','aes128-cts-hmac-sha1-96'::TEXT,
                                                                     'digest_alg','sha1'::TEXT,
@@ -383,7 +570,7 @@ WHERE name = 'test0' AND realm LIKE 'B%';
 
 SELECT 'test hdb update password_history',
        test.check_hdb_hdb_jsonb_update('test hdb update password_history', 'test0', 'BAR.EXAMPLE', $$
-                                       jsonb_set(entry::jsonb, '{"password_history",1}'::TEXT[],
+                                       jsonb_set(entry::jsonb, '{"password_history",0}'::TEXT[],
                                                  jsonb_build_object('mkvno',69::BIGINT,
                                                                     'etype','aes128-cts-hmac-sha1-96'::TEXT,
                                                                     'digest_alg','sha1'::TEXT,
@@ -394,10 +581,6 @@ $$);
 SELECT entry
 FROM hdb.hdb
 WHERE name = 'test0' AND realm LIKE 'B%';
-
-DELETE FROM test.tests
-WHERE testname = 'test hdb update password_history'; /* Haven't figured out how to deal with set_at issue
-                                                        for new password_history. This will have to be checked by eye -L */
 
 SELECT jsonb_set(entry::jsonb, '{"password_history",1,"digest"}'::TEXT[],
                                                  to_jsonb(encode(E'\\x7777', 'base64')))

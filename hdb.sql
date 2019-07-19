@@ -184,11 +184,17 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
     entity_type         heimdal.entity_types NOT NULL,
     id                  BIGINT DEFAULT (nextval('heimdal.ids')),
     policy              TEXT,
+    owner_name          TEXT,
+    owner_container     heimdal.containers,
+    owner_realm         TEXT,
+    owner_entity_type   heimdal.entity_types,
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hepk     PRIMARY KEY (name, container, realm),
     CONSTRAINT hepk2    UNIQUE (id),
                         /* hepk3 is just for denormalzation of entity_type via FKs */
     CONSTRAINT hepk3    UNIQUE (name, container, realm, entity_type),
+    CONSTRAINT heofk    FOREIGN KEY (owner_name, owner_container, owner_realm, owner_entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type),
     CONSTRAINT hefkp    FOREIGN KEY (policy)
                         REFERENCES heimdal.policies (name)
                         ON DELETE SET NULL
@@ -557,6 +563,38 @@ JOIN heimdal.principals p ON a.name = p.name AND a.realm = p.realm AND
 WHERE a.container = 'PRINCIPAL' AND
       a.valid_start <= current_timestamp AND a.valid_end > current_timestamp AND
       p.valid_start <= current_timestamp AND p.valid_end > current_timestamp;
+
+/* Create check function -L */
+
+CREATE OR REPLACE FUNCTION heimdal.chk(
+        _subject_name TEXT, _subject_realm TEXT, _subject_container heimdal.containers,
+        _object_name TEXT, _object_realm TEXT, _object_container heimdal.containers)
+RETURNS BOOLEAN AS $$
+    WITH RECURSIVE groups AS (
+        SELECT _subject_name AS name, _subject_realm AS realm, _subject_container AS container
+        UNION
+        SELECT m.parent_name, m.parent_realm, m.parent_container
+        FROM heimdal.members m
+        WHERE m.member_name = _subject_name AND m.member_realm = _subject_realm AND
+              m.member_container = _subject_container
+        UNION 
+        SELECT m.parent_name, m.parent_realm, m.parent_container
+        FROM heimdal.members m
+        JOIN groups g ON (m.member_name = g.name AND
+                          m.member_realm = g.realm AND
+                          m.member_container = g.container)
+    )
+    SELECT TRUE
+    FROM heimdal.entities e
+    JOIN groups g ON (e.owner_name = g.name AND
+                      e.owner_realm = g.realm AND
+                      e.owner_container = g.container)
+    WHERE e.name = _object_name AND e.realm = _object_realm AND e.container = _object_container
+    UNION ALL
+    SELECT FALSE
+    ORDER BY 1 DESC LIMIT 1;
+; $$ LANGUAGE SQL;
+
 
 /* Create triggers on heimdal inserts -L */
 
