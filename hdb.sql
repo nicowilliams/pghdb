@@ -425,6 +425,31 @@ CREATE TABLE IF NOT EXISTS heimdal.pkinit_cert_names (
  * schema.  We might need to enrich the schema with JSON-encoded COMMENTary.
  */
 
+CREATE TABLE IF NOT EXISTS heimdal.flat_members (
+    parent_name         TEXT,
+    parent_container    heimdal.containers,
+    parent_realm        TEXT,
+    parent_entity_type  heimdal.entity_types NOT NULL
+                        DEFAULT ('GROUP')
+                        CHECK (parent_entity_type = 'GROUP'),
+    member_name         TEXT,
+    member_container    heimdal.containers,
+    member_realm        TEXT,
+    member_entity_type  heimdal.entity_types NOT NULL
+                        DEFAULT ('USER')
+                        CHECK (member_entity_type = 'USER'),
+    LIKE heimdal.common INCLUDING ALL,
+    CONSTRAINT hfmpk     PRIMARY KEY (parent_name, parent_container, parent_realm, member_name, member_container, member_realm),
+    CONSTRAINT hfmfkc    FOREIGN KEY (parent_name, parent_container, parent_realm, parent_entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE,
+    CONSTRAINT hfmfkm    FOREIGN KEY (member_name, member_container, member_realm, member_entity_type)
+                        REFERENCES heimdal.entities (name, container, realm, entity_type)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE
+);
+
 CREATE OR REPLACE VIEW hdb.modified_info AS
 SELECT name AS name, container AS container, realm AS realm,
        modified_by AS modified_by, modified_at AS modified_at
@@ -603,6 +628,12 @@ RETURNS BOOLEAN AS $$
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_entities_func()
 RETURNS TRIGGER AS $$
 BEGIN
+    IF TG_OP = 'INSERT' AND NEW.entity_type = 'GROUP' THEN
+        INSERT INTO heimdal.tc (parent_name, parent_realm, parent_container,
+                                member_name, member_realm, member_container)
+        SELECT NEW.name, NEW.realm, NEW.container,
+               NEW.name, NEW.realm, NEW.container;
+    END IF;
     IF TG_TABLE_NAME = 'entities' THEN
         NEW.display_name :=
             CASE NEW.entity_type
@@ -648,6 +679,48 @@ BEFORE INSERT
 ON heimdal.principals
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_principals_func();
+
+CREATE OR REPLACE FUNCTION heimdal.trigger_on_members_func()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        WITH RECURSIVE parents AS (
+            SELECT NEW.parent_name AS name, NEW.parent_realm AS realm, NEW.parent_container AS container
+            UNION
+            SELECT m.parent_name, m.parent_realm, m.parent_container
+            FROM heimdal.members m
+            JOIN parents p ON (m.member_name = p.name AND
+                               m.member_realm = p.realm AND
+                               m.member_container = p.container)
+        ), members AS (
+            SELECT NEW.member_name AS name, NEW.member_realm AS realm,
+                   NEW.member_container AS container, NEW.member_entity_type AS entity_type
+            UNION
+            SELECT m.member_name, m.member_realm, m.member_container, m.member_entity_type
+            FROM heimdal.members m
+            JOIN members mem ON (m.parent_name = mem.name AND
+                                 m.parent_realm = mem.realm AND
+                                 m.parent_container = mem.container)
+        )
+        INSERT INTO heimdal.tc (parent_name, parent_realm, parent_container,
+                                member_name, member_realm, member_container)
+        SELECT p.name, p.realm, p.container,
+               m.name, m.realm, m.container
+        FROM
+        parents p /* All related parents */
+        CROSS JOIN
+        members m /* All related members */
+        WHERE m.entity_type = 'GROUP'
+        ON CONFLICT DO NOTHING;
+        RETURN NEW;
+    END IF;
+END; $$ LANGUAGE PLPGSQL;
+
+CREATE TRIGGER trigger_on_heimdal_members_transitive_closure
+AFTER INSERT
+ON heimdal.members
+FOR EACH ROW
+EXECUTE FUNCTION heimdal.trigger_on_members_func();
 
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_aliases_func()
 RETURNS TRIGGER AS $$
