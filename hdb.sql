@@ -542,7 +542,7 @@ RETURNS BOOLEAN AS $$
         FROM heimdal.members m
         WHERE m.member_name = _subject_name AND m.member_realm = _subject_realm AND
               m.member_container = _subject_container
-        UNION 
+        UNION
         SELECT m.parent_name, m.parent_realm, m.parent_container
         FROM heimdal.members m
         JOIN groups g ON (m.member_name = g.name AND
@@ -606,7 +606,7 @@ BEGIN
         (name, realm, container, entity_type)
     SELECT NEW.name, NEW.realm, 'PRINCIPAL', 'PRINCIPAL'
     ON CONFLICT DO NOTHING;
-    
+
     NEW.display_name := (
         SELECT e.display_name FROM heimdal.entities e WHERE e.name = NEW.name AND
                                                             e.realm = NEW.realm AND
@@ -643,7 +643,7 @@ BEGIN
                                  m.parent_realm = mem.realm AND
                                  m.parent_container = mem.container)
         )
-        
+
         DELETE FROM heimdal.tc (parent_name, parent_realm, parent_container,
                                 member_name, member_realm, member_container)
         SELECT deletions.parent_name, deletions.parent_realm,
@@ -705,7 +705,7 @@ BEGIN
                    ex.member_container
             FROM exceptions ex
         ) deletions
-        
+
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
@@ -909,9 +909,9 @@ EXECUTE FUNCTION hdb.instead_of_on_aliases_func();
 CREATE OR REPLACE FUNCTION hdb.instead_of_on_keysets_func()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF TG_OP = 'UPDATE' THEN 
+    IF TG_OP = 'UPDATE' THEN
         /* Delete keysets that existed but don't appear in 'ext' -- they're getting dropped*/
-        WITH new_keysets AS ( 
+        WITH new_keysets AS (
             SELECT (q.js->>'kvno'::text)::bigint AS kvno,
                    decode(q.js->>'key', 'base64')::bytea AS key,
                    (q.js->>'ktype'::text)::heimdal.key_type AS ktype,
@@ -935,7 +935,7 @@ BEGIN
         (e.entry->>'salt'::text)::heimdal.salt, (e.entry->>'mkvno'::text)::bigint
     FROM (SELECT jsonb_array_elements(e) FROM jsonb_array_elements(NEW.ext) e(e)) AS e(entry)
     ON CONFLICT DO NOTHING;
-    RETURN NEW; 
+    RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER instead_of_on_hdb_keysets
@@ -1209,7 +1209,7 @@ BEGIN
                           WHERE n.name = k.name   AND n.realm = k.realm AND
                                 n.kvno = k.kvno   AND n.key = k.key AND
                                 n.ktype = k.ktype AND n.etype = k.etype);
-        
+
         /*
          * Insert any new keys that didn't already exist (see the
          * ON CONFLICT clause).
