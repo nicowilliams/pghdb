@@ -179,8 +179,8 @@ ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS heimdal.entities (
     display_name        TEXT,
     name                TEXT,
-    container           heimdal.containers,
     realm               TEXT,
+    container           heimdal.containers,
     entity_type         heimdal.entity_types NOT NULL,
     id                  BIGINT DEFAULT (nextval('heimdal.ids')),
     policy              TEXT,
@@ -189,53 +189,27 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
     owner_realm         TEXT,
     owner_entity_type   heimdal.entity_types,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hepk     PRIMARY KEY (name, container, realm),
+    CONSTRAINT hepk     PRIMARY KEY (name, realm, container),
     CONSTRAINT hepk2    UNIQUE (id),
                         /* hepk3 is just for denormalzation of entity_type via FKs */
-    CONSTRAINT hepk3    UNIQUE (name, container, realm, entity_type),
-    CONSTRAINT heofk    FOREIGN KEY (owner_name, owner_container, owner_realm, owner_entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type),
+    CONSTRAINT heofk    FOREIGN KEY (owner_name, owner_realm, owner_container)
+                        REFERENCES heimdal.entities (name, realm, container),
     CONSTRAINT hefkp    FOREIGN KEY (policy)
                         REFERENCES heimdal.policies (name)
                         ON DELETE SET NULL
                         ON UPDATE CASCADE
 );
 
-CREATE UNIQUE INDEX ON heimdal.entities (name, container, realm, entity_type);
-
-CREATE TABLE IF NOT EXISTS heimdal.groups (
-    display_name        TEXT,
-    name                TEXT,
-    container           heimdal.containers,
-    realm               TEXT,
-    entity_type         heimdal.entity_types NOT NULL
-                        DEFAULT ('GROUP')
-                        CHECK (entity_type = 'GROUP')
-);
-
-CREATE TABLE IF NOT EXISTS heimdal.users (
-    display_name        TEXT,
-    name                TEXT,
-    container           heimdal.containers,
-    realm               TEXT,
-    entity_type         heimdal.entity_types NOT NULL
-                        DEFAULT ('USER')
-                        CHECK (entity_type = 'USER')
-);
-
 CREATE TABLE IF NOT EXISTS heimdal.principals (
     display_name        TEXT,
     name                TEXT,
+    realm               TEXT,
     container           heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
-    realm               TEXT,
     name_type           heimdal.kerberos_name_type
                         DEFAULT ('UNKNOWN'),
     /* flags and etypes are stored separately */
-    entity_type         heimdal.entity_types NOT NULL
-                        DEFAULT ('PRINCIPAL')
-                        CHECK (entity_type = 'PRINCIPAL'),
     kvno                BIGINT DEFAULT (1),
     pw_life             INTERVAL DEFAULT ('90 days'::interval),
     pw_end              TIMESTAMP WITHOUT TIME ZONE
@@ -246,24 +220,24 @@ CREATE TABLE IF NOT EXISTS heimdal.principals (
     max_renew           INTERVAL DEFAUlT ('7 days'::interval),
     password            TEXT, /* very much optional, mostly unused XXX make binary, encrypted */
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hppk     PRIMARY KEY (name, container, realm),
-    CONSTRAINT hpfka    FOREIGN KEY (name, container, realm, entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type)
+    CONSTRAINT hppk     PRIMARY KEY (name, realm, container),
+    CONSTRAINT hpfka    FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.principal_etypes(
     name                TEXT,
+    realm               TEXT,
     container           heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
-    realm               TEXT,
     etype               heimdal.enc_type NOT NULL,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hpepk    PRIMARY KEY (name, container, realm, etype),
-    CONSTRAINT hpefk    FOREIGN KEY (name, container, realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hpepk    PRIMARY KEY (name, realm, container, etype),
+    CONSTRAINT hpefk    FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
@@ -275,39 +249,34 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_etypes(
 
 CREATE TABLE IF NOT EXISTS heimdal.principal_flags(
     name                TEXT,
+    realm               TEXT,
     container           heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
-    realm               TEXT,
     flag                heimdal.princ_flags NOT NULL,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hpfpk    PRIMARY KEY (name, container, realm, flag),
-    CONSTRAINT hpffk    FOREIGN KEY (name, container, realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hpfpk    PRIMARY KEY (name, realm, container, flag),
+    CONSTRAINT hpffk    FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.members (
     parent_name         TEXT,
-    parent_container    heimdal.containers,
     parent_realm        TEXT,
-    parent_entity_type  heimdal.entity_types NOT NULL
-                        DEFAULT ('GROUP')
-                        CHECK (parent_entity_type = 'GROUP'),
+    parent_container    heimdal.containers,
     member_name         TEXT,
-    member_container    heimdal.containers,
     member_realm        TEXT,
-    member_entity_type  heimdal.entity_types NOT NULL
-                        CHECK (member_entity_type = 'USER' OR member_entity_type = 'GROUP'),
+    member_container    heimdal.containers,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hmpk     PRIMARY KEY (parent_name, parent_container, parent_realm, member_name, member_container, member_realm),
-    CONSTRAINT hmfkc    FOREIGN KEY (parent_name, parent_container, parent_realm, parent_entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type)
+    CONSTRAINT hmpk     PRIMARY KEY (parent_name, parent_realm, parent_container, member_name, member_realm, member_container),
+    CONSTRAINT hmfkc    FOREIGN KEY (parent_name, parent_realm, parent_container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
-    CONSTRAINT hmfkm    FOREIGN KEY (member_name, member_container, member_realm, member_entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type)
+    CONSTRAINT hmfkm    FOREIGN KEY (member_name, member_realm, member_container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
@@ -320,8 +289,10 @@ CREATE TYPE heimdal.salt AS (
 
 CREATE TABLE IF NOT EXISTS heimdal.keys (
     name                TEXT,
-    container           heimdal.containers,
     realm               TEXT,
+    container           heimdal.containers
+                        DEFAULT ('PRINCIPAL')
+                        CHECK (container = 'PRINCIPAL'),
     kvno                BIGINT,
     ktype               heimdal.key_type,
     etype               heimdal.enc_type, /* varies according to heimdal.key_type */
@@ -331,9 +302,9 @@ CREATE TABLE IF NOT EXISTS heimdal.keys (
     /* keys can be disabled separately from enc_types */
     enabled             BOOLEAN DEFAULT (TRUE),
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hkpk     PRIMARY KEY (name, container, realm, ktype, etype, kvno, key),
-    CONSTRAINT hkfk1    FOREIGN KEY (name, container, realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hkpk     PRIMARY KEY (name, realm, container, ktype, etype, kvno, key),
+    CONSTRAINT hkfk1    FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
     CONSTRAINT hkfk2    FOREIGN KEY (ktype,etype)
@@ -344,48 +315,42 @@ CREATE TABLE IF NOT EXISTS heimdal.keys (
 
 CREATE TABLE IF NOT EXISTS heimdal.aliases (
     name                TEXT,
+    realm               TEXT,
     container           heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
-    realm               TEXT,
-    entity_type         heimdal.entity_types
-                        DEFAULT ('PRINCIPAL')
-                        CHECK (entity_type = 'PRINCIPAL'),
     alias_name          TEXT,
+    alias_realm         TEXT,
     alias_container     heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
-    alias_realm         TEXT,
-    alias_entity_type   heimdal.entity_types
-                        DEFAULT ('PRINCIPAL')
-                        CHECK (alias_entity_type = 'PRINCIPAL'),
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hapk1    PRIMARY KEY (name, container, realm, alias_name, alias_container, alias_realm),
-    CONSTRAINT hafk1    FOREIGN KEY (alias_name, alias_container, alias_realm, alias_entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type)
+    CONSTRAINT hapk1    PRIMARY KEY (name, realm, container, alias_name, alias_realm, alias_container),
+    CONSTRAINT hafk1    FOREIGN KEY (alias_name, alias_realm, alias_container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
-    CONSTRAINT hafk2    FOREIGN KEY (name, container, realm, entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type)
+    CONSTRAINT hafk2    FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.password_history (
     name                TEXT,
+    realm               TEXT,
     container           heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
-    realm               TEXT,
     etype               heimdal.enc_type,
     /* XXX Should be MAC, not digest */
     digest_alg          heimdal.digest_type, /* why not just dtype like table digest_types? -L */
     digest              BYTEA,
     mkvno               BIGINT,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hphpk    PRIMARY KEY (name, container, realm, etype, digest_alg, mkvno),
-    CONSTRAINT hpfk     FOREIGN KEY (name, container, realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hphpk    PRIMARY KEY (name, realm, container, etype, digest_alg, mkvno),
+    CONSTRAINT hpfk     FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
     CONSTRAINT hkfk2    FOREIGN KEY (digest_alg)
@@ -401,18 +366,18 @@ CREATE TYPE heimdal.pkix_name AS (
 );
 CREATE TABLE IF NOT EXISTS heimdal.pkinit_cert_names (
     name                TEXT,
+    realm               TEXT,
     container           heimdal.containers
                         DEFAULT ('PRINCIPAL')
                         CHECK (container = 'PRINCIPAL'),
-    realm               TEXT,
     subject             heimdal.pkix_name,
     issuer              heimdal.pkix_name,
     serial              BYTEA,
     anchor              heimdal.pkix_name,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hpcnpk   PRIMARY KEY (name, container, realm, subject, issuer, serial),
-    CONSTRAINT hpcfk    FOREIGN KEY (name, container, realm)
-                        REFERENCES heimdal.entities (name, container, realm)
+    CONSTRAINT hpcnpk   PRIMARY KEY (name, realm, container, subject, issuer, serial),
+    CONSTRAINT hpcfk    FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
@@ -425,33 +390,8 @@ CREATE TABLE IF NOT EXISTS heimdal.pkinit_cert_names (
  * schema.  We might need to enrich the schema with JSON-encoded COMMENTary.
  */
 
-CREATE TABLE IF NOT EXISTS heimdal.flat_members (
-    parent_name         TEXT,
-    parent_container    heimdal.containers,
-    parent_realm        TEXT,
-    parent_entity_type  heimdal.entity_types NOT NULL
-                        DEFAULT ('GROUP')
-                        CHECK (parent_entity_type = 'GROUP'),
-    member_name         TEXT,
-    member_container    heimdal.containers,
-    member_realm        TEXT,
-    member_entity_type  heimdal.entity_types NOT NULL
-                        DEFAULT ('USER')
-                        CHECK (member_entity_type = 'USER'),
-    LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hfmpk     PRIMARY KEY (parent_name, parent_container, parent_realm, member_name, member_container, member_realm),
-    CONSTRAINT hfmfkc    FOREIGN KEY (parent_name, parent_container, parent_realm, parent_entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type)
-                        ON DELETE CASCADE
-                        ON UPDATE CASCADE,
-    CONSTRAINT hfmfkm    FOREIGN KEY (member_name, member_container, member_realm, member_entity_type)
-                        REFERENCES heimdal.entities (name, container, realm, entity_type)
-                        ON DELETE CASCADE
-                        ON UPDATE CASCADE
-);
-
 CREATE OR REPLACE VIEW hdb.modified_info AS
-SELECT name AS name, container AS container, realm AS realm,
+SELECT name AS name, realm AS realm, container AS container,
        modified_by AS modified_by, modified_at AS modified_at
 FROM heimdal.principals;
 
@@ -638,7 +578,7 @@ BEGIN
         NEW.display_name :=
             CASE NEW.entity_type
             WHEN 'PRINCIPAL' THEN NEW.name || '@' || NEW.realm
-            ELSE lower(TG_TABLE_NAME) || ':' || NEW.name || '@' || lower(NEW.realm)
+            ELSE lower(NEW.entity_type::TEXT) || ': ' || NEW.name || '@' || lower(NEW.realm)
             END;
     END IF;
     IF TG_OP = 'UPDATE' AND TG_WHEN = 'AFTER' THEN
@@ -683,7 +623,107 @@ EXECUTE FUNCTION heimdal.trigger_on_principals_func();
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_members_func()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF TG_OP = 'INSERT' THEN
+    /* DELETE GOES HERE */
+    IF TG_WHEN = 'BEFORE' AND TG_OP <> 'INSERT' THEN
+        WITH RECURSIVE parents AS (
+            SELECT OLD.parent_name AS name, OLD.parent_realm AS realm, OLD.parent_container AS container
+            UNION
+            SELECT m.parent_name, m.parent_realm, m.parent_container
+            FROM heimdal.members m
+            JOIN parents p ON (m.member_name = p.name AND
+                               m.member_realm = p.realm AND
+                               m.member_container = p.container)
+        ), members AS (
+            SELECT OLD.member_name AS name, OLD.member_realm AS realm,
+                   OLD.member_container AS container
+            UNION
+            SELECT m.member_name, m.member_realm, m.member_container
+            FROM heimdal.members m
+            JOIN members mem ON (m.parent_name = mem.name AND
+                                 m.parent_realm = mem.realm AND
+                                 m.parent_container = mem.container)
+        )
+        
+        DELETE FROM heimdal.tc (parent_name, parent_realm, parent_container,
+                                member_name, member_realm, member_container)
+        SELECT deletions.parent_name, deletions.parent_realm,
+               deletions.parent_container, deletions.member_name,
+               deletions.member_realm, deletions.member_container
+        FROM (WITH RECURSIVE exceptions AS (
+                    SELECT m.member_name AS member_name,
+                           m.member_realm AS member_realm,
+                           m.member_container AS member_container,
+                           m.parent_name AS parent_name,
+                           m.parent_realm AS parent_realm,
+                           m.parent_container AS parent_container
+                    FROM members mem
+                    JOIN heimdal.members m
+                    WHERE m.member_name = mem.name AND
+                          m.member_realm = mem.realm AND
+                          m.member_container = mem.container AND NOT
+                         (m.member_name = OLD.member_name AND
+                          m.member_realm = OLD.member_realm AND
+                          m.member_container = OLD.member_container AND
+                          m.parent_name = OLD.parent_name AND
+                          m.parent_realm = OLD.parent_realm AND
+                          m.parent_container = OLD.parent_container)
+                    UNION
+                    SELECT ex.member_name AS member_name,
+                           ex.member_realm AS member_realm,
+                           ex.member_container AS member_container,
+                           m.parent_name AS parent_name,
+                           m.parent_realm AS parent_realm,
+                           m.parent_container AS parent_container
+                    FROM heimdal.members m
+                    JOIN exceptions ex
+                    WHERE m.member_name = ex.parent_name AND
+                          m.member_realm = ex.parent_realm AND
+                          m.member_container = ex.parent_container AND NOT
+                         (m.member_name = OLD.member_name AND
+                          m.member_realm = OLD.member_realm AND
+                          m.member_container = OLD.member_container AND
+                          m.parent_name = OLD.parent_name AND
+                          m.parent_realm = OLD.parent_realm AND
+                          m.parent_container = OLD.parent_container)
+            )
+            SELECT p.name AS parent_name,
+                   p.realm AS parent_realm,
+                   p.container AS parent_container,
+                   m.name AS member_name,
+                   m.realm AS member_realm,
+                   m.container AS member_container
+            FROM
+            parents p
+            CROSS JOIN
+            members m
+            EXCEPT
+            SELECT ex.parent_name,
+                   ex.parent_realm,
+                   ex.parent_container,
+                   ex.member_name,
+                   ex.member_realm,
+                   ex.member_container
+            FROM exceptions ex
+        ) deletions
+        
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+    END IF;
+
+    IF NOT EXISTS
+        (SELECT 1 FROM heimdal.entities e
+         WHERE e.name = NEW.parent_name AND e.realm = NEW.parent_realm AND
+               e.container = NEW.parent_container AND e.entity_type = 'GROUP') OR
+       NOT EXISTS
+        (SELECT 1 FROM heimdal.entities e
+         WHERE e.name = NEW.member_name AND e.realm = NEW.member_realm AND
+               e.container = NEW.member_container AND
+               (e.entity_type = 'GROUP' OR e.entity_type = 'USER')) THEN
+        RETURN NULL; /* XXX Raise instead */
+    END IF;
+
+    IF TG_WHEN = 'AFTER' THEN
         WITH RECURSIVE parents AS (
             SELECT NEW.parent_name AS name, NEW.parent_realm AS realm, NEW.parent_container AS container
             UNION
@@ -694,9 +734,9 @@ BEGIN
                                m.member_container = p.container)
         ), members AS (
             SELECT NEW.member_name AS name, NEW.member_realm AS realm,
-                   NEW.member_container AS container, NEW.member_entity_type AS entity_type
+                   NEW.member_container AS container
             UNION
-            SELECT m.member_name, m.member_realm, m.member_container, m.member_entity_type
+            SELECT m.member_name, m.member_realm, m.member_container
             FROM heimdal.members m
             JOIN members mem ON (m.parent_name = mem.name AND
                                  m.parent_realm = mem.realm AND
@@ -710,14 +750,23 @@ BEGIN
         parents p /* All related parents */
         CROSS JOIN
         members m /* All related members */
-        WHERE m.entity_type = 'GROUP'
+        JOIN heimdal.entities e ON (m.name = e.name AND
+                                    m.realm = e.realm AND
+                                    m.container = e.container)
+        WHERE e.entity_type = 'GROUP'
         ON CONFLICT DO NOTHING;
         RETURN NEW;
     END IF;
 END; $$ LANGUAGE PLPGSQL;
 
-CREATE TRIGGER trigger_on_heimdal_members_transitive_closure
-AFTER INSERT
+CREATE TRIGGER trigger_on_heimdal_members_transitive_closure_before
+BEFORE INSERT OR UPDATE OR DELETE
+ON heimdal.members
+FOR EACH ROW
+EXECUTE FUNCTION heimdal.trigger_on_members_func();
+
+CREATE TRIGGER trigger_on_heimdal_members_transitive_closure_after
+AFTER INSERT OR UPDATE
 ON heimdal.members
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_members_func();
