@@ -80,7 +80,7 @@ CREATE TYPE heimdal.containers AS ENUM (
      *
      * XXX For now use only 'PRINCIPAL' -Nico
      */
-    'PRINCIPAL', 'USER', 'GROUP', 'ACL', 'HOST'
+    'PRINCIPAL', 'USER', 'GROUP', 'ACL', 'HOST', 'ROLE', 'LABEL', 'VERB'
 );
 CREATE TYPE heimdal.entity_types AS ENUM (
     /*
@@ -95,7 +95,7 @@ CREATE TYPE heimdal.entity_types AS ENUM (
      *
      * XXX For now use only 'USER'.
      */
-    'PRINCIPAL', 'USER', 'ROLE', 'GROUP', 'CLUSTER', 'ACL'
+    'PRINCIPAL', 'USER', 'ROLE', 'GROUP', 'CLUSTER', 'ACL', 'LABEL', 'VERB'
 );
 CREATE TYPE heimdal.princ_flags AS ENUM (
     'INITIAL', 'FORWARDABLE', 'PROXIABLE', 'RENEWABLE', 'POSTDATE', 'SERVER',
@@ -271,7 +271,7 @@ CREATE TABLE IF NOT EXISTS heimdal.members (
     member_container    heimdal.containers,
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hmpk     PRIMARY KEY (parent_name, parent_realm, parent_container, member_name, member_realm, member_container),
-    CONSTRAINT hmfkc    FOREIGN KEY (parent_name, parent_realm, parent_container)
+    CONSTRAINT hmfkp    FOREIGN KEY (parent_name, parent_realm, parent_container)
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
@@ -381,6 +381,115 @@ CREATE TABLE IF NOT EXISTS heimdal.pkinit_cert_names (
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS heimdal.roles2verbs (
+    role_name           TEXT,
+    role_realm          TEXT,
+    role_container      heimdal.containers
+                        DEFAULT ('ROLE')
+                        CHECK (role_container = 'ROLE'),
+    verb_name           TEXT,
+    verb_realm          TEXT,
+    verb_container      heimdal.containers
+                        DEFAULT ('VERB')
+                        CHECK (verb_container = 'VERB'),
+    LIKE heimdal.common INCLUDING ALL,
+    CONSTRAINT hrpk    PRIMARY KEY (role_name, role_realm, role_container, verb_name, verb_realm, verb_container),
+    CONSTRAINT hrfkr   FOREIGN KEY (role_name, role_realm, role_container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE,
+    CONSTRAINT hrfkv   FOREIGN KEY (verb_name, verb_realm, verb_container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS heimdal.grants (
+    label_name           TEXT,
+    label_realm          TEXT,
+    label_container      heimdal.containers
+                        DEFAULT ('LABEL')
+                        CHECK (label_container = 'LABEL'),
+    role_name           TEXT,
+    role_realm          TEXT,
+    role_container      heimdal.containers
+                        DEFAULT ('ROLE')
+                        CHECK (role_container = 'ROLE'),
+    subject_name        TEXT,
+    subject_realm       TEXT,
+    subject_container   heimdal.containers
+                        CHECK (subject_container = 'GROUP' OR subject_container = 'USER'),
+    LIKE heimdal.common INCLUDING ALL,
+    CONSTRAINT hgpk    PRIMARY KEY (label_name, label_realm, label_container,
+                                    role_name, role_realm, role_container,
+                                    subject_name, subject_realm, subject_container),
+    CONSTRAINT hgfkl   FOREIGN KEY (label_name, label_realm, label_container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE,
+    CONSTRAINT hgfkr   FOREIGN KEY (role_name, role_realm, role_container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE,
+    CONSTRAINT hgfks   FOREIGN KEY (subject_name, subject_realm, subject_container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE
+);
+
+CREATE OR REPLACE VIEW heimdal.tc_view AS
+WITH RECURSIVE groups AS (
+    /* Seed with every group includes itself -- this is important */
+    SELECT name AS parent_name, realm AS parent_realm, container AS parent_container,
+           name AS member_name, realm AS member_realm, container AS member_container
+    FROM heimdal.entities WHERE entity_type = 'GROUP'
+    UNION
+    /* Get the parents of all groups */
+    SELECT m.parent_name, m.parent_realm, m.parent_container,
+           m.member_name, m.member_realm, m.member_container
+    FROM heimdal.members m JOIN groups g ON (m.member_name = g.parent_name AND m.member_realm = g.parent_realm AND m.member_container = g.parent_container)
+)
+SELECT * FROM groups;
+
+/* Materialize the view -- we'll have triggers to keep it up to date */
+SELECT mat_views.create_view('heimdal','tc', 'heimdal', 'tc_view');
+/* Populate it (creating it doesn't do this) */
+SELECT mat_views.refresh_view('heimdal','tc');
+/* Look 'ma!  PG's MAT VIEWs do not allow this: */
+ALTER TABLE heimdal.tc
+    ADD CONSTRAINT htcpk1
+        PRIMARY KEY (parent_name, parent_realm, parent_container,
+                     member_name, member_realm, member_container);
+/* nor this! */
+CREATE INDEX tc2 ON heimdal.tc
+    (member_name, member_realm, member_container,
+     parent_name, parent_realm, parent_container);
+
+/* Now a view for all the users' group memerships */
+CREATE OR REPLACE VIEW heimdal.tcu AS
+SELECT tc.parent_name, tc.parent_realm, tc.parent_container, e.name, e.realm, e.container
+FROM heimdal.entities e
+/* get direct memberships */
+JOIN heimdal.members m ON (e.name = m.member_name AND e.realm = m.member_realm AND e.container = m.member_container)
+/* get all remaining indirect memberships */
+JOIN heimdal.tc tc ON (tc.member_name = m.parent_name AND tc.member_realm = m.parent_realm AND tc.member_container = m.parent_container)
+WHERE e.entity_type = 'USER'
+UNION
+SELECT e.name, e.realm, e.container, e.name, e.realm, e.container
+FROM heimdal.entities e
+WHERE e.entity_type = 'USER';
+
+CREATE OR REPLACE VIEW heimdal.grants2direct_grantees AS
+SELECT g.label_name AS label_name,
+       g.label_realm AS label_realm, g.label_container AS label_container,
+       rv.verb_name AS verb_name, rv.verb_realm AS verb_realm,
+       rv.verb_container AS verb_container, g.subject_name AS grantee_name,
+       g.subject_realm AS grantee_realm, g.subject_container AS grantee_container
+FROM heimdal.roles2verbs rv
+JOIN heimdal.grants g ON rv.role_name = g.role_name AND
+                         rv.role_realm = g.role_realm AND
+                         rv.role_container = g.role_container;
 
 /*
  * HDB VIEWs and INSTEAD OF triggers for interfacing libhdb to HDBs hosted on
@@ -535,31 +644,40 @@ CREATE OR REPLACE FUNCTION heimdal.chk(
         _subject_name TEXT, _subject_realm TEXT, _subject_container heimdal.containers,
         _object_name TEXT, _object_realm TEXT, _object_container heimdal.containers)
 RETURNS BOOLEAN AS $$
-    WITH RECURSIVE groups AS (
-        SELECT _subject_name AS name, _subject_realm AS realm, _subject_container AS container
-        UNION
-        SELECT m.parent_name, m.parent_realm, m.parent_container
-        FROM heimdal.members m
-        WHERE m.member_name = _subject_name AND m.member_realm = _subject_realm AND
-              m.member_container = _subject_container
-        UNION
-        SELECT m.parent_name, m.parent_realm, m.parent_container
-        FROM heimdal.members m
-        JOIN groups g ON (m.member_name = g.name AND
-                          m.member_realm = g.realm AND
-                          m.member_container = g.container)
-    )
-    SELECT TRUE
-    FROM heimdal.entities e
-    JOIN groups g ON (e.owner_name = g.name AND
-                      e.owner_realm = g.realm AND
-                      e.owner_container = g.container)
-    WHERE e.name = _object_name AND e.realm = _object_realm AND e.container = _object_container
-    UNION ALL
-    SELECT FALSE
-    ORDER BY 1 DESC LIMIT 1;
+    SELECT count(*) <> 0
+    FROM (
+            SELECT parent_name, parent_realm, parent_container
+            FROM heimdal.tcu
+            WHERE name = _subject_name AND realm = _subject_realm AND
+                  container = _subject_container
+        INTERSECT
+            SELECT owner_name, owner_realm, owner_container
+            FROM heimdal.entities
+            WHERE name = _object_name AND realm = _object_realm AND
+                  container = _object_container
+    ) q;
 ; $$ LANGUAGE SQL;
 
+CREATE OR REPLACE FUNCTION heimdal.chk(
+        _subject_name TEXT, _subject_realm TEXT, _subject_container heimdal.containers,
+        _verb_name TEXT, _verb_realm TEXT, _verb_container heimdal.containers,
+        _label_name TEXT, _label_realm TEXT, _label_container heimdal.containers)
+RETURNS BOOLEAN AS $$
+    SELECT count(*) <> 0
+    FROM (
+            SELECT parent_name, parent_realm, parent_container
+            FROM heimdal.tcu
+            WHERE name = _subject_name AND realm = _subject_realm AND
+                  container = _subject_container
+        INTERSECT
+            SELECT grantee_name, grantee_realm, grantee_container
+            FROM heimdal.grants2direct_grantees
+            WHERE label_name = _label_name AND label_realm = _label_realm AND
+                  label_container = _label_container AND
+                  verb_name = _verb_name AND verb_realm = _verb_realm AND
+                  verb_container = _verb_container
+    ) q;
+; $$ LANGUAGE SQL;
 
 /* Create triggers on heimdal inserts -L */
 
@@ -623,69 +741,51 @@ EXECUTE FUNCTION heimdal.trigger_on_principals_func();
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_members_func()
 RETURNS TRIGGER AS $$
 BEGIN
+
+    IF TG_OP = 'UPDATE' THEN
+        RETURN NULL; /* XXX Raise instead */
+    END IF;
+
     /* DELETE GOES HERE */
-    IF TG_WHEN = 'BEFORE' AND TG_OP <> 'INSERT' THEN
+    IF TG_OP = 'DELETE' THEN
         WITH RECURSIVE parents AS (
-            SELECT OLD.parent_name AS name, OLD.parent_realm AS realm, OLD.parent_container AS container
+            SELECT OLD.parent_name AS name, OLD.parent_realm AS realm,
+                   OLD.parent_container AS container
             UNION
             SELECT m.parent_name, m.parent_realm, m.parent_container
             FROM heimdal.members m
-            JOIN parents p ON (m.member_name = p.name AND
-                               m.member_realm = p.realm AND
-                               m.member_container = p.container)
-        ), members AS (
+            JOIN parents p ON m.member_name = p.name AND
+                              m.member_realm = p.realm AND
+                              m.member_container = p.container
+        ), rmembers AS (
             SELECT OLD.member_name AS name, OLD.member_realm AS realm,
                    OLD.member_container AS container
             UNION
             SELECT m.member_name, m.member_realm, m.member_container
             FROM heimdal.members m
-            JOIN members mem ON (m.parent_name = mem.name AND
+            JOIN rmembers mem ON m.parent_name = mem.name AND
                                  m.parent_realm = mem.realm AND
-                                 m.parent_container = mem.container)
-        )
-
-        DELETE FROM heimdal.tc (parent_name, parent_realm, parent_container,
-                                member_name, member_realm, member_container)
-        SELECT deletions.parent_name, deletions.parent_realm,
-               deletions.parent_container, deletions.member_name,
-               deletions.member_realm, deletions.member_container
-        FROM (WITH RECURSIVE exceptions AS (
-                    SELECT m.member_name AS member_name,
-                           m.member_realm AS member_realm,
-                           m.member_container AS member_container,
-                           m.parent_name AS parent_name,
-                           m.parent_realm AS parent_realm,
-                           m.parent_container AS parent_container
-                    FROM members mem
-                    JOIN heimdal.members m
-                    WHERE m.member_name = mem.name AND
-                          m.member_realm = mem.realm AND
-                          m.member_container = mem.container AND NOT
-                         (m.member_name = OLD.member_name AND
-                          m.member_realm = OLD.member_realm AND
-                          m.member_container = OLD.member_container AND
-                          m.parent_name = OLD.parent_name AND
-                          m.parent_realm = OLD.parent_realm AND
-                          m.parent_container = OLD.parent_container)
-                    UNION
-                    SELECT ex.member_name AS member_name,
-                           ex.member_realm AS member_realm,
-                           ex.member_container AS member_container,
-                           m.parent_name AS parent_name,
-                           m.parent_realm AS parent_realm,
-                           m.parent_container AS parent_container
-                    FROM heimdal.members m
-                    JOIN exceptions ex
-                    WHERE m.member_name = ex.parent_name AND
-                          m.member_realm = ex.parent_realm AND
-                          m.member_container = ex.parent_container AND NOT
-                         (m.member_name = OLD.member_name AND
-                          m.member_realm = OLD.member_realm AND
-                          m.member_container = OLD.member_container AND
-                          m.parent_name = OLD.parent_name AND
-                          m.parent_realm = OLD.parent_realm AND
-                          m.parent_container = OLD.parent_container)
-            )
+                                 m.parent_container = mem.container
+        ), exceptions AS (
+            SELECT mem.name AS member_name,
+                   mem.realm AS member_realm,
+                   mem.container AS member_container,
+                   mem.name AS parent_name,
+                   mem.realm AS parent_realm,
+                   mem.container AS parent_container
+            FROM rmembers mem
+            UNION
+            SELECT exc.member_name,
+                   exc.member_realm,
+                   exc.member_container,
+                   m.parent_name,
+                   m.parent_realm,
+                   m.parent_container
+            FROM heimdal.members m
+            JOIN exceptions exc ON m.member_name = exc.parent_name AND
+                                   m.member_realm = exc.parent_realm AND
+                                   m.member_container = exc.parent_container
+        ), deletions AS (
             SELECT p.name AS parent_name,
                    p.realm AS parent_realm,
                    p.container AS parent_container,
@@ -695,20 +795,27 @@ BEGIN
             FROM
             parents p
             CROSS JOIN
-            members m
+            rmembers m
             EXCEPT
-            SELECT ex.parent_name,
-                   ex.parent_realm,
-                   ex.parent_container,
-                   ex.member_name,
-                   ex.member_realm,
-                   ex.member_container
-            FROM exceptions ex
-        ) deletions
+            SELECT exc.parent_name,
+                   exc.parent_realm,
+                   exc.parent_container,
+                   exc.member_name,
+                   exc.member_realm,
+                   exc.member_container
+            FROM exceptions exc
+        )
 
-        IF TG_OP = 'DELETE' THEN
-            RETURN OLD;
-        END IF;
+        DELETE FROM heimdal.tc AS tc
+        USING deletions d
+        WHERE tc.parent_name = d.parent_name AND
+              tc.parent_realm = d.parent_realm AND
+              tc.parent_container = d.parent_container AND
+              tc.member_name = d.member_name AND
+              tc.member_realm = d.member_realm AND
+              tc.member_container = d.member_container;
+
+        RETURN OLD;
     END IF;
 
     IF NOT EXISTS
@@ -723,53 +830,96 @@ BEGIN
         RETURN NULL; /* XXX Raise instead */
     END IF;
 
-    IF TG_WHEN = 'AFTER' THEN
-        WITH RECURSIVE parents AS (
-            SELECT NEW.parent_name AS name, NEW.parent_realm AS realm, NEW.parent_container AS container
-            UNION
-            SELECT m.parent_name, m.parent_realm, m.parent_container
-            FROM heimdal.members m
-            JOIN parents p ON (m.member_name = p.name AND
-                               m.member_realm = p.realm AND
-                               m.member_container = p.container)
-        ), members AS (
-            SELECT NEW.member_name AS name, NEW.member_realm AS realm,
-                   NEW.member_container AS container
-            UNION
-            SELECT m.member_name, m.member_realm, m.member_container
-            FROM heimdal.members m
-            JOIN members mem ON (m.parent_name = mem.name AND
-                                 m.parent_realm = mem.realm AND
-                                 m.parent_container = mem.container)
-        )
-        INSERT INTO heimdal.tc (parent_name, parent_realm, parent_container,
-                                member_name, member_realm, member_container)
-        SELECT p.name, p.realm, p.container,
-               m.name, m.realm, m.container
-        FROM
-        parents p /* All related parents */
-        CROSS JOIN
-        members m /* All related members */
-        JOIN heimdal.entities e ON (m.name = e.name AND
-                                    m.realm = e.realm AND
-                                    m.container = e.container)
-        WHERE e.entity_type = 'GROUP'
-        ON CONFLICT DO NOTHING;
-        RETURN NEW;
-    END IF;
+    WITH RECURSIVE parents AS (
+        SELECT NEW.parent_name AS name, NEW.parent_realm AS realm, NEW.parent_container AS container
+        UNION
+        SELECT m.parent_name, m.parent_realm, m.parent_container
+        FROM heimdal.members m
+        JOIN parents p ON (m.member_name = p.name AND
+                           m.member_realm = p.realm AND
+                           m.member_container = p.container)
+    ), rmembers AS (
+        SELECT NEW.member_name AS name, NEW.member_realm AS realm,
+               NEW.member_container AS container
+        UNION
+        SELECT m.member_name, m.member_realm, m.member_container
+        FROM heimdal.members m
+        JOIN rmembers mem ON (m.parent_name = mem.name AND
+                             m.parent_realm = mem.realm AND
+                             m.parent_container = mem.container)
+    )
+    INSERT INTO heimdal.tc (parent_name, parent_realm, parent_container,
+                            member_name, member_realm, member_container)
+    SELECT p.name, p.realm, p.container,
+           m.name, m.realm, m.container
+    FROM
+    parents p /* All related parents */
+    CROSS JOIN
+    rmembers m /* All related members */
+    JOIN heimdal.entities e ON (m.name = e.name AND
+                                m.realm = e.realm AND
+                                m.container = e.container)
+    WHERE e.entity_type = 'GROUP'
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER trigger_on_heimdal_members_transitive_closure_before
-BEFORE INSERT OR UPDATE OR DELETE
+BEFORE UPDATE
 ON heimdal.members
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_members_func();
 
 CREATE TRIGGER trigger_on_heimdal_members_transitive_closure_after
-AFTER INSERT OR UPDATE
+AFTER INSERT OR DELETE
 ON heimdal.members
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_members_func();
+
+/*
+
+CREATE OR REPLACE FUNCTION heimdal.trigger_on_grants_func()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+
+    IF NOT EXISTS
+        (SELECT 1 FROM heimdal.entities e
+         WHERE e.name = NEW.label_name AND e.realm = NEW.label_realm AND
+               e.container = NEW.label_container AND e.entity_type = 'LABEL') OR
+       NOT EXISTS
+        (SELECT 1 FROM heimdal.entities e
+         WHERE e.name = NEW.role_name AND e.realm = NEW.role_realm AND
+               e.container = NEW.role_container AND e.entity_type = 'ROLE') OR
+       NOT EXISTS
+        (SELECT 1 FROM heimdal.entities e
+         WHERE e.name = NEW.subject_name AND e.realm = NEW.subject_realm AND
+               e.container = NEW.subject_container AND
+               (e.entity_type = 'GROUP' OR e.entity_type = 'USER')) THEN
+        RETURN NULL;  XXX Raise instead 
+    END IF;
+
+    INSERT INTO heimdal. XXX name of view  (verb_name, verb_realm, verb_container,
+                                                grantee_name, grantee_realm, grantee_container)
+    SELECT rv.verb_name, rv.verb_realm, rv.verb_container,
+           e.name, e.realm, e.container
+    FROM
+    heimdal.roles2verbs rv,
+    heimdal.entities e
+    WHERE e.name = NEW.subject_name AND e.realm = NEW.subject_realm AND
+          e.container = NEW.subject_container AND rv.role_name = NEW.role_name AND
+          rv.role_realm = NEW.role_realm AND rv.role_container = NEW.role_container;
+END; LANGUAGE PLPGSQL;
+
+CREATE TRIGGER trigger_on_heimdal_grants
+AFTER INSERT OR DELETE
+ON heimdal.grants
+FOR EACH ROW
+EXECUTE FUNCTION heimdal.trigger_on_grants_func();
+
+*/
 
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_aliases_func()
 RETURNS TRIGGER AS $$

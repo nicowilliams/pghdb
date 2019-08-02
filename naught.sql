@@ -4,5 +4,4 @@ drop schema hdb cascade;
 drop schema test cascade;
 \i mat_views.sql
 \i hdb.sql
-\i tc.sql
 \i test-hdb.sql

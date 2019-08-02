@@ -62,6 +62,31 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION test.check_against_table(_testname TEXT,
+                                                    first_table_schema TEXT,
+                                                    first_table_name TEXT,
+                                                    second_table_schema TEXT,
+                                                    second_table_name TEXT,
+                                                    code TEXT)
+RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
+BEGIN
+    EXECUTE code;
+    EXECUTE format($q$
+        INSERT INTO test.tests (testname, pass)
+        SELECT %1$L, count(*) = 0
+        FROM (SELECT 1
+              FROM %2$I.%3$I AS tleft
+              NATURAL FULL OUTER JOIN
+              %4$I.%5$I AS tright
+              WHERE tleft IS NULL OR tright IS NULL) q;
+    $q$, _testname, first_table_schema, first_table_name,
+    second_table_schema, second_table_name);
+    RETURN pass
+    FROM test.tests t
+    WHERE t.testname = _testname;
+END;
+$$;
+
 DROP TABLE IF EXISTS test_hdb_hdb_entry_update;
 CREATE TEMP TABLE IF NOT EXISTS test_hdb_hdb_entry_update
     (testname TEXT, name TEXT, realm TEXT, entry JSONB);
@@ -147,6 +172,19 @@ VALUES ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup0', 'FOO.EXAMPL
        ('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup1', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
        ('testgroup2', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup2', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
        ('testgroup3', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup3', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup4', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup4', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup5', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup5', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup6', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup6', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup7', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup7', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup8', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup8', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('testgroup9', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup9', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
+       ('WRITE', 'FOO.EXAMPLE', 'VERB', 'VERB', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'VERB'),
+       ('READ', 'FOO.EXAMPLE', 'VERB', 'VERB', 'READ', 'FOO.EXAMPLE', 'VERB', 'VERB'),
+       ('WRITER', 'FOO.EXAMPLE', 'ROLE', 'ROLE', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'ROLE'),
+       ('READER', 'FOO.EXAMPLE', 'ROLE', 'ROLE', 'READER', 'FOO.EXAMPLE', 'ROLE', 'ROLE'),
+       ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'LABEL', 'testlabel0', 'FOO.EXAMPLE', 'LABEL', 'LABEL'),
+       ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'LABEL', 'testlabel1', 'FOO.EXAMPLE', 'LABEL', 'LABEL'),
+       ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'LABEL', 'testlabel2', 'FOO.EXAMPLE', 'LABEL', 'LABEL'),
        ('user0', 'FOO.EXAMPLE', 'USER', 'USER', 'user0', 'FOO.EXAMPLE', 'USER', 'USER'),
        ('user1', 'FOO.EXAMPLE', 'USER', 'USER', 'user1', 'FOO.EXAMPLE', 'USER', 'USER'),
        ('user2', 'FOO.EXAMPLE', 'USER', 'USER', 'user2', 'FOO.EXAMPLE', 'USER', 'USER'),
@@ -154,6 +192,25 @@ VALUES ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup0', 'FOO.EXAMPL
        ('user4', 'FOO.EXAMPLE', 'USER', 'USER', 'user4', 'FOO.EXAMPLE', 'USER', 'USER'),
        ('user5', 'FOO.EXAMPLE', 'USER', 'USER', 'user5', 'FOO.EXAMPLE', 'USER', 'USER'),
        ('user0', 'BAR.EXAMPLE', 'USER', 'USER', 'user0', 'BAR.EXAMPLE', 'USER', 'USER');
+$$);
+SELECT 'test roles2verbs',
+       test.test_insert_PKs('test roles2verbs', $$
+INSERT INTO heimdal.roles2verbs (role_name, role_realm, role_container, verb_name, verb_realm, verb_container)
+VALUES ('WRITER', 'FOO.EXAMPLE', 'ROLE', 'WRITE', 'FOO.EXAMPLE', 'VERB'),
+       ('WRITER', 'FOO.EXAMPLE', 'ROLE', 'READ', 'FOO.EXAMPLE', 'VERB'),
+       ('READER', 'FOO.EXAMPLE', 'ROLE', 'READ', 'FOO.EXAMPLE', 'VERB');
+$$);
+SELECT 'test grants creation',
+       test.test_insert_PKs('test grants creation', $$
+INSERT INTO heimdal.grants (label_name, label_realm, label_container,
+                            role_name, role_realm, role_container,
+                            subject_name, subjecT_realm, subject_container)
+VALUES ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user0', 'FOO.EXAMPLE', 'USER'),
+       ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user1', 'FOO.EXAMPLE', 'USER'),
+       ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user2', 'FOO.EXAMPLE', 'USER'),
+       ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'READER', 'FOO.EXAMPLE', 'ROLE', 'testgroup5', 'FOO.EXAMPLE', 'GROUP'),
+       ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'READER', 'FOO.EXAMPLE', 'ROLE', 'testgroup0', 'FOO.EXAMPLE', 'GROUP'),
+       ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'READER', 'FOO.EXAMPLE', 'ROLE', 'testgroup1', 'FOO.EXAMPLE', 'GROUP');
 $$);
 SELECT 'test principal insertion',
        test.test_insert_PKs('test principal insertion', $$
@@ -271,17 +328,38 @@ VALUES ('test0', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
 $$);
 SELECT 'test members',
        test.test_insert_PKs('test members', $$
-INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm, member_entity_type)
-VALUES ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user0', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user1', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user2', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user3', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup1', 'GROUP', 'FOO.EXAMPLE', 'user1', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'user4', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'user5', 'USER', 'FOO.EXAMPLE', 'USER'),
-       ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup1', 'GROUP', 'FOO.EXAMPLE', 'GROUP'),
-       ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup2', 'GROUP', 'FOO.EXAMPLE', 'GROUP');
+INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+VALUES ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user0', 'USER', 'FOO.EXAMPLE'),
+       ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user1', 'USER', 'FOO.EXAMPLE'),
+       ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user2', 'USER', 'FOO.EXAMPLE'),
+       ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user3', 'USER', 'FOO.EXAMPLE'),
+       ('testgroup1', 'GROUP', 'FOO.EXAMPLE', 'user1', 'USER', 'FOO.EXAMPLE'),
+       ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'user4', 'USER', 'FOO.EXAMPLE'),
+       ('testgroup2', 'GROUP', 'FOO.EXAMPLE', 'user5', 'USER', 'FOO.EXAMPLE'),
+       ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup1', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup4', 'GROUP', 'FOO.EXAMPLE', 'testgroup3', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup5', 'GROUP', 'FOO.EXAMPLE', 'testgroup6', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup6', 'GROUP', 'FOO.EXAMPLE', 'testgroup4', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup5', 'GROUP', 'FOO.EXAMPLE', 'testgroup1', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup6', 'GROUP', 'FOO.EXAMPLE', 'testgroup0', 'GROUP', 'FOO.EXAMPLE');
 $$);
+
+DROP TABLE temp_tc;
+CREATE TEMP TABLE temp_tc AS
+SELECT *
+FROM heimdal.tc;
+
+SELECT 'test members 2',
+       test.test_insert_PKs('test members 2', $$
+INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+VALUES ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup2', 'GROUP', 'FOO.EXAMPLE');
+$$);
+
+DROP TABLE temp_tc2;
+CREATE TEMP TABLE temp_tc2 AS
+SELECT *
+FROM heimdal.tc;
+
 SELECT 'test key creation',
        test.test_insert_PKs('test key creation', $$
 INSERT INTO heimdal.keys (name, container, realm, kvno, ktype, etype, key)
@@ -423,6 +501,58 @@ SELECT * FROM hdb.etypes WHERE name LIKE 'test0%';
 SELECT * FROM hdb.hdb WHERE name LIKE 'test0%';
 $$);
 
+SELECT 'test delete from heimdal members',
+       test.check_against_table('test delete from heimdal members', 'pg_temp', 'temp_tc', 'heimdal', 'tc', $$
+DELETE FROM heimdal.members
+WHERE parent_name = 'testgroup3' AND
+      member_name = 'testgroup2';
+$$);
+
+SELECT 'test insert into heimdal members',
+       test.check_against_table('test insert into heimdal members', 'pg_temp', 'temp_tc2', 'heimdal', 'tc', $$
+INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+VALUES ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup2', 'GROUP', 'FOO.EXAMPLE');
+$$);
+
+SELECT 'test members 3',
+       test.test_insert_PKs('test members 3', $$
+INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+VALUES ('testgroup8', 'GROUP', 'FOO.EXAMPLE', 'testgroup9', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup9', 'GROUP', 'FOO.EXAMPLE', 'testgroup7', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup7', 'GROUP', 'FOO.EXAMPLE', 'testgroup4', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup6', 'GROUP', 'FOO.EXAMPLE', 'testgroup8', 'GROUP', 'FOO.EXAMPLE'),
+       ('testgroup9', 'GROUP', 'FOO.EXAMPLE', 'testgroup5', 'GROUP', 'FOO.EXAMPLE');
+$$);
+
+DROP TABLE temp_tc3;
+CREATE TEMP TABLE temp_tc3 AS
+SELECT *
+FROM heimdal.tc;
+
+SELECT 'test members 4',
+       test.test_insert_PKs('test members 4', $$
+INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+VALUES ('testgroup7', 'GROUP', 'FOO.EXAMPLE', 'testgroup8', 'GROUP', 'FOO.EXAMPLE');
+$$);
+
+DROP TABLE temp_tc4;
+CREATE TEMP TABLE temp_tc4 AS
+SELECT *
+FROM heimdal.tc;
+
+SELECT 'test delete from heimdal members break 3-loop',
+       test.check_against_table('test delete from heimdal members break 3-loop', 'pg_temp', 'temp_tc3', 'heimdal', 'tc', $$
+DELETE FROM heimdal.members
+WHERE parent_name = 'testgroup7' AND
+      member_name = 'testgroup8';
+$$);
+
+SELECT 'test insert into heimdal members make 3-loop',
+       test.check_against_table('test insert into heimdal members make 3-loop', 'pg_temp', 'temp_tc4', 'heimdal', 'tc', $$
+INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+VALUES ('testgroup7', 'GROUP', 'FOO.EXAMPLE', 'testgroup8', 'GROUP', 'FOO.EXAMPLE');
+$$);
+
 DROP TABLE IF EXISTS x;
 CREATE TEMP TABLE x AS
 SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
@@ -435,6 +565,31 @@ UPDATE x SET name = 'testfoo', realm = 'BAR.EXAMPLE',
 
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",0,"alias_name"}'::TEXT[], to_jsonb('aliasfoo'::TEXT));
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",1,"alias_name"}'::TEXT[], to_jsonb('aliasfoo2'::TEXT));
+$$);
+
+SELECT 'test verb user->label 0'
+        test.expect_true('test verb user->label 0', $$
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+$$);
+
+SELECT 'test verb user->label 1'
+        test.expect_true('test verb user->label 1', $$
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+$$);
+
+SELECT 'test verb user->label 2'
+        test.expect_false('test verb user->label 2', $$
+heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+$$);
+
+SELECT 'test verb user->label 3'
+        test.expect_true('test verb user->label 3', $$
+heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+$$);
+
+SELECT 'test verb user->label 4'
+        test.expect_true('test verb user->label 4', $$
+heimdal.chk('user1', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel2', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
 SELECT 'test ownership user->user',
@@ -450,16 +605,6 @@ $$);
 SELECT 'test ownership user->principal via membership 2 levels',
         test.expect_true('test ownership user->principal via membership 2 levels', $$
 heimdal.chk('user1', 'FOO.EXAMPLE', 'USER', 'test9', 'FOO.EXAMPLE', 'PRINCIPAL')
-$$);
-
-SELECT 'test ownership group->principal via membership 1 level',
-        test.expect_true('test ownership group->principal via membership 1 level', $$
-heimdal.chk('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'test9', 'FOO.EXAMPLE', 'PRINCIPAL')
-$$);
-
-SELECT 'test ownership group->principal',
-        test.expect_true('test ownership group->principal', $$
-heimdal.chk('testgroup1', 'FOO.EXAMPLE', 'GROUP', 'test7', 'FOO.EXAMPLE', 'PRINCIPAL')
 $$);
 
 SELECT 'test ownership user->principal not owned',
