@@ -416,14 +416,14 @@ CREATE TABLE IF NOT EXISTS heimdal.grants (
     role_container      heimdal.containers
                         DEFAULT ('ROLE')
                         CHECK (role_container = 'ROLE'),
-    subject_name        TEXT,
-    subject_realm       TEXT,
-    subject_container   heimdal.containers
-                        CHECK (subject_container = 'GROUP' OR subject_container = 'USER'),
+    grantee_name        TEXT,
+    grantee_realm       TEXT,
+    grantee_container   heimdal.containers
+                        CHECK (grantee_container = 'GROUP' OR grantee_container = 'USER'),
     LIKE heimdal.common INCLUDING ALL,
     CONSTRAINT hgpk    PRIMARY KEY (label_name, label_realm, label_container,
                                     role_name, role_realm, role_container,
-                                    subject_name, subject_realm, subject_container),
+                                    grantee_name, grantee_realm, grantee_container),
     CONSTRAINT hgfkl   FOREIGN KEY (label_name, label_realm, label_container)
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
@@ -432,7 +432,7 @@ CREATE TABLE IF NOT EXISTS heimdal.grants (
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
-    CONSTRAINT hgfks   FOREIGN KEY (subject_name, subject_realm, subject_container)
+    CONSTRAINT hgfks   FOREIGN KEY (grantee_name, grantee_realm, grantee_container)
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
@@ -447,7 +447,7 @@ WITH RECURSIVE groups AS (
     UNION
     /* Get the parents of all groups */
     SELECT m.parent_name, m.parent_realm, m.parent_container,
-           m.member_name, m.member_realm, m.member_container
+           g.member_name, g.member_realm, g.member_container
     FROM heimdal.members m JOIN groups g ON (m.member_name = g.parent_name AND m.member_realm = g.parent_realm AND m.member_container = g.parent_container)
 )
 SELECT * FROM groups;
@@ -467,8 +467,10 @@ CREATE INDEX tc2 ON heimdal.tc
      parent_name, parent_realm, parent_container);
 
 /* Now a view for all the users' group memerships */
-CREATE OR REPLACE VIEW heimdal.tcu AS
-SELECT tc.parent_name, tc.parent_realm, tc.parent_container, e.name, e.realm, e.container
+CREATE OR REPLACE VIEW heimdal.tcu_view AS
+SELECT tc.parent_name AS parent_name, tc.parent_realm AS parent_realm,
+       tc.parent_container AS parent_container, e.name AS member_name,
+       e.realm AS member_realm, e.container AS member_container
 FROM heimdal.entities e
 /* get direct memberships */
 JOIN heimdal.members m ON (e.name = m.member_name AND e.realm = m.member_realm AND e.container = m.member_container)
@@ -480,16 +482,46 @@ SELECT e.name, e.realm, e.container, e.name, e.realm, e.container
 FROM heimdal.entities e
 WHERE e.entity_type = 'USER';
 
+SELECT mat_views.create_view('heimdal','tcu','heimdal','tcu_view');
+
+SELECT mat_views.refresh_view('heimdal','tcu');
+
+ALTER TABLE heimdal.tcu
+    ADD CONSTRAINT htcupk1
+        PRIMARY KEY (parent_name, parent_realm, parent_container,
+                     member_name, member_realm, member_container);
+
+CREATE INDEX tcu2 ON heimdal.tcu
+    (member_name, member_realm, member_container,
+     parent_name, parent_realm, parent_container);
+
 CREATE OR REPLACE VIEW heimdal.grants2direct_grantees AS
 SELECT g.label_name AS label_name,
        g.label_realm AS label_realm, g.label_container AS label_container,
        rv.verb_name AS verb_name, rv.verb_realm AS verb_realm,
-       rv.verb_container AS verb_container, g.subject_name AS grantee_name,
-       g.subject_realm AS grantee_realm, g.subject_container AS grantee_container
+       rv.verb_container AS verb_container, g.grantee_name AS grantee_name,
+       g.grantee_realm AS grantee_realm, g.grantee_container AS grantee_container
 FROM heimdal.roles2verbs rv
 JOIN heimdal.grants g ON rv.role_name = g.role_name AND
                          rv.role_realm = g.role_realm AND
                          rv.role_container = g.role_container;
+
+SELECT mat_views.create_view('heimdal','g2dg','heimdal','grants2direct_grantees');
+
+SELECT mat_views.refresh_view('heimdal','g2dg');
+
+ALTER TABLE heimdal.g2dg
+    ADD CONSTRAINT hgdgpk1
+        PRIMARY KEY (label_name, label_realm, label_container,
+                     grantee_name, grantee_realm, grantee_container,
+                     verb_name, verb_realm, verb_container);
+
+CREATE INDEX g2dg2 ON heimdal.g2dg
+    (grantee_name, grantee_realm, grantee_container,
+     label_name, label_realm, label_container,
+     verb_name, verb_realm, verb_container);
+
+
 
 /*
  * HDB VIEWs and INSTEAD OF triggers for interfacing libhdb to HDBs hosted on
@@ -641,15 +673,15 @@ WHERE a.container = 'PRINCIPAL' AND
 /* Create check function -L */
 
 CREATE OR REPLACE FUNCTION heimdal.chk(
-        _subject_name TEXT, _subject_realm TEXT, _subject_container heimdal.containers,
+        _grantee_name TEXT, _grantee_realm TEXT, _grantee_container heimdal.containers,
         _object_name TEXT, _object_realm TEXT, _object_container heimdal.containers)
 RETURNS BOOLEAN AS $$
     SELECT count(*) <> 0
     FROM (
             SELECT parent_name, parent_realm, parent_container
             FROM heimdal.tcu
-            WHERE name = _subject_name AND realm = _subject_realm AND
-                  container = _subject_container
+            WHERE member_name = _grantee_name AND member_realm = _grantee_realm AND
+                  member_container = _grantee_container
         INTERSECT
             SELECT owner_name, owner_realm, owner_container
             FROM heimdal.entities
@@ -659,7 +691,7 @@ RETURNS BOOLEAN AS $$
 ; $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION heimdal.chk(
-        _subject_name TEXT, _subject_realm TEXT, _subject_container heimdal.containers,
+        _grantee_name TEXT, _grantee_realm TEXT, _grantee_container heimdal.containers,
         _verb_name TEXT, _verb_realm TEXT, _verb_container heimdal.containers,
         _label_name TEXT, _label_realm TEXT, _label_container heimdal.containers)
 RETURNS BOOLEAN AS $$
@@ -667,11 +699,11 @@ RETURNS BOOLEAN AS $$
     FROM (
             SELECT parent_name, parent_realm, parent_container
             FROM heimdal.tcu
-            WHERE name = _subject_name AND realm = _subject_realm AND
-                  container = _subject_container
+            WHERE member_name = _grantee_name AND member_realm = _grantee_realm AND
+                  member_container = _grantee_container
         INTERSECT
             SELECT grantee_name, grantee_realm, grantee_container
-            FROM heimdal.grants2direct_grantees
+            FROM heimdal.g2dg
             WHERE label_name = _label_name AND label_realm = _label_realm AND
                   label_container = _label_container AND
                   verb_name = _verb_name AND verb_realm = _verb_realm AND
@@ -815,6 +847,8 @@ BEGIN
               tc.member_realm = d.member_realm AND
               tc.member_container = d.member_container;
 
+        PERFORM mat_views.set_needs_refresh('heimdal','tcu');
+
         RETURN OLD;
     END IF;
 
@@ -861,6 +895,9 @@ BEGIN
                                 m.container = e.container)
     WHERE e.entity_type = 'GROUP'
     ON CONFLICT DO NOTHING;
+
+    PERFORM mat_views.set_needs_refresh('heimdal','tcu');
+
     RETURN NEW;
 END; $$ LANGUAGE PLPGSQL;
 
@@ -876,12 +913,41 @@ ON heimdal.members
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_members_func();
 
-/*
-
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_grants_func()
 RETURNS TRIGGER AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
+
+        WITH deletions AS (
+                SELECT OLD.label_name AS label_name, OLD.label_realm AS label_realm,
+                       OLD.label_container AS label_container, rv.verb_name AS verb_name,
+                       rv.verb_realm AS verb_realm, rv.verb_container AS verb_container,
+                       OLD.grantee_name AS grantee_name, OLD.grantee_realm AS grantee_realm,
+                       OLD.grantee_container AS grantee_container
+                FROM
+                heimdal.roles2verbs rv
+            EXCEPT
+                SELECT gt.label_name, gt.label_realm, gt.label_container,
+                       rv.verb_name, rv.verb_realm, rv.verb_container,
+                       gt.grantee_name, gt.grantee_realm, gt.grantee_container
+                FROM
+                heimdal.grants gt
+                JOIN
+                heimdal.roles2verbs rv
+                ON rv.role_name = gt.role_name AND rv.role_realm = gt.role_realm AND
+                   rv.role_container = gt.role_container
+                WHERE gt.label_name = OLD.label_name AND gt.label_realm = OLD.label_realm AND
+                      gt.label_container = OLD.label_container AND gt.grantee_name = OLD.grantee_name AND
+                      gt.grantee_realm = OLD.grantee_realm AND gt.grantee_container = OLD.grantee_container
+        )
+        DELETE FROM heimdal.g2dg g2dg
+        USING deletions d
+        WHERE g2dg.label_name = d.label_name AND g2dg.label_realm = d.label_realm AND
+              g2dg.label_container = d.label_container AND g2dg.verb_name = d.verb_name AND
+              g2dg.verb_realm = d.verb_realm AND g2dg.verb_container = d.verb_container AND
+              g2dg.grantee_name = d.grantee_name AND g2dg.grantee_realm = d.grantee_realm AND
+              g2dg.grantee_container = d.grantee_container;
+
         RETURN OLD;
     END IF;
 
@@ -895,31 +961,32 @@ BEGIN
                e.container = NEW.role_container AND e.entity_type = 'ROLE') OR
        NOT EXISTS
         (SELECT 1 FROM heimdal.entities e
-         WHERE e.name = NEW.subject_name AND e.realm = NEW.subject_realm AND
-               e.container = NEW.subject_container AND
+         WHERE e.name = NEW.grantee_name AND e.realm = NEW.grantee_realm AND
+               e.container = NEW.grantee_container AND
                (e.entity_type = 'GROUP' OR e.entity_type = 'USER')) THEN
-        RETURN NULL;  XXX Raise instead 
+        RETURN NULL; /* XXX Raise instead */
     END IF;
 
-    INSERT INTO heimdal. XXX name of view  (verb_name, verb_realm, verb_container,
-                                                grantee_name, grantee_realm, grantee_container)
-    SELECT rv.verb_name, rv.verb_realm, rv.verb_container,
-           e.name, e.realm, e.container
+    INSERT INTO heimdal.g2dg /* XXX name of view */ (label_name, label_realm, label_container,
+                                                     verb_name, verb_realm, verb_container,
+                                                     grantee_name, grantee_realm, grantee_container)
+    SELECT NEW.label_name, NEW.label_realm, NEW.label_container,
+           rv.verb_name, rv.verb_realm, rv.verb_container,
+           NEW.grantee_name, NEW.grantee_realm, NEW.grantee_container
     FROM
-    heimdal.roles2verbs rv,
-    heimdal.entities e
-    WHERE e.name = NEW.subject_name AND e.realm = NEW.subject_realm AND
-          e.container = NEW.subject_container AND rv.role_name = NEW.role_name AND
-          rv.role_realm = NEW.role_realm AND rv.role_container = NEW.role_container;
-END; LANGUAGE PLPGSQL;
+    heimdal.roles2verbs rv
+    WHERE rv.role_name = NEW.role_name AND
+          rv.role_realm = NEW.role_realm AND rv.role_container = NEW.role_container
+    ON CONFLICT DO NOTHING;
+
+    RETURN NEW;
+END; $$ LANGUAGE PLPGSQL;
 
 CREATE TRIGGER trigger_on_heimdal_grants
 AFTER INSERT OR DELETE
 ON heimdal.grants
 FOR EACH ROW
 EXECUTE FUNCTION heimdal.trigger_on_grants_func();
-
-*/
 
 CREATE OR REPLACE FUNCTION heimdal.trigger_on_aliases_func()
 RETURNS TRIGGER AS $$

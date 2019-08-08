@@ -5,33 +5,39 @@ SELECT set_config('hdb.test','true',true);
 CREATE SCHEMA test;
 DROP TABLE IF EXISTS test.tests;
 CREATE TABLE test.tests (testname TEXT PRIMARY KEY, pass BOOLEAN);
+DROP TABLE IF EXISTS test.testnames;
+CREATE TABLE test.testnames (testname TEXT PRIMARY KEY);
 
-CREATE OR REPLACE FUNCTION test.expect_success(testname TEXT, code TEXT)
+CREATE OR REPLACE FUNCTION test.expect_success(_testname TEXT, code TEXT)
 RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
 BEGIN
+    INSERT INTO test.testnames (testname)
+    SELECT _testname;
     EXECUTE code;
     INSERT INTO test.tests (testname, pass)
-    SELECT testname, TRUE;
+    SELECT _testname, TRUE;
     RETURN TRUE;
 EXCEPTION
 WHEN OTHERS THEN
     INSERT INTO test.tests (testname, pass)
-    SELECT testname, FALSE;
+    SELECT _testname, FALSE;
     RETURN FALSE;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION test.expect_exception(testname TEXT, code TEXT)
+CREATE OR REPLACE FUNCTION test.expect_exception(_testname TEXT, code TEXT)
 RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
 BEGIN
+    INSERT INTO test.testnames (testname)
+    SELECT _testname;
     EXECUTE code;
     INSERT INTO test.tests (testname, pass)
-    SELECT testname, FALSE;
+    SELECT _testname, FALSE;
     RETURN FALSE;
 EXCEPTION
 WHEN OTHERS THEN
     INSERT INTO test.tests (testname, pass)
-    SELECT testname, TRUE;
+    SELECT _testname, TRUE;
     RETURN TRUE;
 END;
 $$;
@@ -39,6 +45,8 @@ $$;
 CREATE OR REPLACE FUNCTION test.expect_true(_testname TEXT, func TEXT)
 RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
 BEGIN
+    INSERT INTO test.testnames (testname)
+    SELECT _testname;
     EXECUTE format($q$
         INSERT INTO test.tests (testname, pass)
         SELECT %1$L, %2$s
@@ -52,6 +60,8 @@ $$;
 CREATE OR REPLACE FUNCTION test.expect_false(_testname TEXT, func TEXT)
 RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
 BEGIN
+    INSERT INTO test.testnames (testname)
+    SELECT _testname;
     EXECUTE format($q$
         INSERT INTO test.tests (testname, pass)
         SELECT %1$L, NOT %2$s
@@ -70,6 +80,8 @@ CREATE OR REPLACE FUNCTION test.check_against_table(_testname TEXT,
                                                     code TEXT)
 RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
 BEGIN
+    INSERT INTO test.testnames (testname)
+    SELECT _testname;
     EXECUTE code;
     EXECUTE format($q$
         INSERT INTO test.tests (testname, pass)
@@ -98,6 +110,8 @@ CREATE OR REPLACE FUNCTION test.check_hdb_hdb_jsonb_update(
     _code TEXT)
 RETURNS BOOLEAN LANGUAGE PLPGSQL AS $$
 BEGIN
+    INSERT INTO test.testnames (testname)
+    SELECT _testname;
     DELETE FROM pg_temp.test_hdb_hdb_entry_update
     WHERE testname = _testname;
 
@@ -132,10 +146,12 @@ BEGIN
     RETURN pass FROM test.tests WHERE testname = _testname;
 END;$$;
 
-CREATE OR REPLACE FUNCTION test.test_insert_PKs(testname TEXT, code TEXT)
+CREATE OR REPLACE FUNCTION test.test_insert_PKs(_testname TEXT, code TEXT)
 RETURNS BOOLEAN LANGUAGE SQL AS $$
-SELECT test.expect_success(testname || ' first', code) AND
-       test.expect_exception(testname || ' second', code);
+    INSERT INTO test.testnames (testname)
+    SELECT _testname || ' second';
+    SELECT test.expect_success(_testname || ' first', code) AND
+           test.expect_exception(_testname || ' second', code);
 $$;
 /*
 CREATE OR REPLACE FUNCTION test.check_selects(testname TEXT, lft TEXT, rhgt TEXT)
@@ -204,7 +220,7 @@ SELECT 'test grants creation',
        test.test_insert_PKs('test grants creation', $$
 INSERT INTO heimdal.grants (label_name, label_realm, label_container,
                             role_name, role_realm, role_container,
-                            subject_name, subjecT_realm, subject_container)
+                            grantee_name, grantee_realm, grantee_container)
 VALUES ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user0', 'FOO.EXAMPLE', 'USER'),
        ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user1', 'FOO.EXAMPLE', 'USER'),
        ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user2', 'FOO.EXAMPLE', 'USER'),
@@ -567,27 +583,27 @@ UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",0,"alias_name"}'::TEXT[
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",1,"alias_name"}'::TEXT[], to_jsonb('aliasfoo2'::TEXT));
 $$);
 
-SELECT 'test verb user->label 0'
+SELECT 'test verb user->label 0',
         test.expect_true('test verb user->label 0', $$
 heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
-SELECT 'test verb user->label 1'
+SELECT 'test verb user->label 1',
         test.expect_true('test verb user->label 1', $$
 heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
-SELECT 'test verb user->label 2'
+SELECT 'test verb user->label 2',
         test.expect_false('test verb user->label 2', $$
 heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
-SELECT 'test verb user->label 3'
+SELECT 'test verb user->label 3',
         test.expect_true('test verb user->label 3', $$
 heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
-SELECT 'test verb user->label 4'
+SELECT 'test verb user->label 4',
         test.expect_true('test verb user->label 4', $$
 heimdal.chk('user1', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel2', 'FOO.EXAMPLE', 'LABEL')
 $$);
@@ -836,9 +852,29 @@ DROP TABLE IF EXISTS y;
 CREATE TEMP TABLE y AS 
 SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
 
+SELECT CASE count(*) WHEN 0 THEN 'NO EXCEPTIONS THROWN' ELSE 'SOME EXCEPTIONS THROWN' END
+FROM (
+        SELECT testname
+        FROM
+        test.testnames
+    EXCEPT
+        SELECT testname
+        FROM
+        test.tests
+) missing_tests;
+
 SELECT CASE count(*) WHEN 0 THEN 'ALL TESTS PASS' ELSE 'SOME TESTS FAIL' END
 FROM test.tests
 WHERE NOT pass;
+
+CREATE VIEW test.missing_tests AS
+    SELECT testname
+    FROM
+    test.testnames
+EXCEPT
+    SELECT testname
+    FROM
+    test.tests;
 
 /*
 SELECT jsonb_set(e.entry::jsonb, '{"keys"}'::TEXT[],
