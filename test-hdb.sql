@@ -1,4 +1,4 @@
-\unset ON_ERROR_STOP
+\set ON_ERROR_STOP
 
 SELECT set_config('hdb.test','true',true);
 
@@ -194,10 +194,12 @@ VALUES ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup0', 'FOO.EXAMPL
        ('testgroup7', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup7', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
        ('testgroup8', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup8', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
        ('testgroup9', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup9', 'FOO.EXAMPLE', 'GROUP', 'GROUP'),
-       ('WRITE', 'FOO.EXAMPLE', 'VERB', 'VERB', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'VERB'),
-       ('READ', 'FOO.EXAMPLE', 'VERB', 'VERB', 'READ', 'FOO.EXAMPLE', 'VERB', 'VERB'),
-       ('WRITER', 'FOO.EXAMPLE', 'ROLE', 'ROLE', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'ROLE'),
-       ('READER', 'FOO.EXAMPLE', 'ROLE', 'ROLE', 'READER', 'FOO.EXAMPLE', 'ROLE', 'ROLE'),
+       ('WRITE', 'HEIMDAL_VERB', 'VERB', 'VERB', 'WRITE', 'HEIMDAL_VERB', 'VERB', 'VERB'),
+       ('READ', 'HEIMDAL_VERB', 'VERB', 'VERB', 'READ', 'HEIMDAL_VERB', 'VERB', 'VERB'),
+       ('SEE', 'HEIMDAL_VERB', 'VERB', 'VERB', 'SEE', 'HEIMDAL_VERB', 'VERB', 'VERB'),
+       ('WRITER', 'HEIMDAL_ROLE', 'ROLE', 'ROLE', 'WRITER', 'HEIMDAL_ROLE', 'ROLE', 'ROLE'),
+       ('READER', 'HEIMDAL_ROLE', 'ROLE', 'ROLE', 'READER', 'HEIMDAL_ROLE', 'ROLE', 'ROLE'),
+       ('SEE', 'HEIMDAL_ROLE', 'ROLE', 'ROLE', 'SEE', 'HEIMDAL_ROLE', 'ROLE', 'ROLE'),
        ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'LABEL', 'testlabel0', 'FOO.EXAMPLE', 'LABEL', 'LABEL'),
        ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'LABEL', 'testlabel1', 'FOO.EXAMPLE', 'LABEL', 'LABEL'),
        ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'LABEL', 'testlabel2', 'FOO.EXAMPLE', 'LABEL', 'LABEL'),
@@ -209,24 +211,32 @@ VALUES ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'GROUP', 'testgroup0', 'FOO.EXAMPL
        ('user5', 'FOO.EXAMPLE', 'USER', 'USER', 'user5', 'FOO.EXAMPLE', 'USER', 'USER'),
        ('user0', 'BAR.EXAMPLE', 'USER', 'USER', 'user0', 'BAR.EXAMPLE', 'USER', 'USER');
 $$);
+SELECT 'test entity labeling',
+       test.test_insert_PKs('test entity labeling', $$
+INSERT INTO heimdal.entity_labels (name, realm, container, label_name, label_realm, label_container)
+VALUES ('testgroup0', 'FOO.EXAMPLE', 'GROUP', 'testlabel0', 'FOO.EXAMPLE', 'LABEL');
+$$);
 SELECT 'test roles2verbs',
        test.test_insert_PKs('test roles2verbs', $$
-INSERT INTO heimdal.roles2verbs (role_name, role_realm, role_container, verb_name, verb_realm, verb_container)
-VALUES ('WRITER', 'FOO.EXAMPLE', 'ROLE', 'WRITE', 'FOO.EXAMPLE', 'VERB'),
-       ('WRITER', 'FOO.EXAMPLE', 'ROLE', 'READ', 'FOO.EXAMPLE', 'VERB'),
-       ('READER', 'FOO.EXAMPLE', 'ROLE', 'READ', 'FOO.EXAMPLE', 'VERB');
+INSERT INTO heimdal.roles2verbs (name, realm, container, verb_name, verb_realm, verb_container)
+VALUES ('WRITER', 'HEIMDAL_ROLE', 'ROLE', 'WRITE', 'HEIMDAL_VERB', 'VERB'),
+       ('WRITER', 'HEIMDAL_ROLE', 'ROLE', 'READ', 'HEIMDAL_VERB', 'VERB'),
+       ('WRITER', 'HEIMDAL_ROLE', 'ROLE', 'SEE', 'HEIMDAL_VERB', 'VERB'),
+       ('READER', 'HEIMDAL_ROLE', 'ROLE', 'READ', 'HEIMDAL_VERB', 'VERB'),
+       ('READER', 'HEIMDAL_ROLE', 'ROLE', 'SEE', 'HEIMDAL_VERB', 'VERB'),
+       ('SEE', 'HEIMDAL_ROLE', 'ROLE', 'SEE', 'HEIMDAL_VERB', 'VERB');
 $$);
 SELECT 'test grants creation',
        test.test_insert_PKs('test grants creation', $$
 INSERT INTO heimdal.grants (label_name, label_realm, label_container,
                             role_name, role_realm, role_container,
-                            grantee_name, grantee_realm, grantee_container)
-VALUES ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user0', 'FOO.EXAMPLE', 'USER'),
-       ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user1', 'FOO.EXAMPLE', 'USER'),
-       ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'FOO.EXAMPLE', 'ROLE', 'user2', 'FOO.EXAMPLE', 'USER'),
-       ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'READER', 'FOO.EXAMPLE', 'ROLE', 'testgroup5', 'FOO.EXAMPLE', 'GROUP'),
-       ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'READER', 'FOO.EXAMPLE', 'ROLE', 'testgroup0', 'FOO.EXAMPLE', 'GROUP'),
-       ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'READER', 'FOO.EXAMPLE', 'ROLE', 'testgroup1', 'FOO.EXAMPLE', 'GROUP');
+                            name, realm, container)
+VALUES ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'HEIMDAL_ROLE', 'ROLE', 'user0', 'FOO.EXAMPLE', 'USER'),
+       ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'HEIMDAL_ROLE', 'ROLE', 'user1', 'FOO.EXAMPLE', 'USER'),
+       ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'WRITER', 'HEIMDAL_ROLE', 'ROLE', 'user2', 'FOO.EXAMPLE', 'USER'),
+       ('testlabel0', 'FOO.EXAMPLE', 'LABEL', 'READER', 'HEIMDAL_ROLE', 'ROLE', 'testgroup5', 'FOO.EXAMPLE', 'GROUP'),
+       ('testlabel1', 'FOO.EXAMPLE', 'LABEL', 'READER', 'HEIMDAL_ROLE', 'ROLE', 'testgroup0', 'FOO.EXAMPLE', 'GROUP'),
+       ('testlabel2', 'FOO.EXAMPLE', 'LABEL', 'READER', 'HEIMDAL_ROLE', 'ROLE', 'testgroup1', 'FOO.EXAMPLE', 'GROUP');
 $$);
 SELECT 'test principal insertion',
        test.test_insert_PKs('test principal insertion', $$
@@ -344,7 +354,7 @@ VALUES ('test0', 'FOO.EXAMPLE', 'aes128-cts-hmac-sha1-96'),
 $$);
 SELECT 'test members',
        test.test_insert_PKs('test members', $$
-INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+INSERT INTO heimdal.members (name, container, realm, member_name, member_container, member_realm)
 VALUES ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user0', 'USER', 'FOO.EXAMPLE'),
        ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user1', 'USER', 'FOO.EXAMPLE'),
        ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user2', 'USER', 'FOO.EXAMPLE'),
@@ -360,18 +370,18 @@ VALUES ('testgroup0', 'GROUP', 'FOO.EXAMPLE', 'user0', 'USER', 'FOO.EXAMPLE'),
        ('testgroup6', 'GROUP', 'FOO.EXAMPLE', 'testgroup0', 'GROUP', 'FOO.EXAMPLE');
 $$);
 
-DROP TABLE temp_tc;
+DROP TABLE IF EXISTS temp_tc;
 CREATE TEMP TABLE temp_tc AS
 SELECT *
 FROM heimdal.tc;
 
 SELECT 'test members 2',
        test.test_insert_PKs('test members 2', $$
-INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+INSERT INTO heimdal.members (name, container, realm, member_name, member_container, member_realm)
 VALUES ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup2', 'GROUP', 'FOO.EXAMPLE');
 $$);
 
-DROP TABLE temp_tc2;
+DROP TABLE IF EXISTS temp_tc2;
 CREATE TEMP TABLE temp_tc2 AS
 SELECT *
 FROM heimdal.tc;
@@ -520,19 +530,19 @@ $$);
 SELECT 'test delete from heimdal members',
        test.check_against_table('test delete from heimdal members', 'pg_temp', 'temp_tc', 'heimdal', 'tc', $$
 DELETE FROM heimdal.members
-WHERE parent_name = 'testgroup3' AND
+WHERE name = 'testgroup3' AND
       member_name = 'testgroup2';
 $$);
 
 SELECT 'test insert into heimdal members',
        test.check_against_table('test insert into heimdal members', 'pg_temp', 'temp_tc2', 'heimdal', 'tc', $$
-INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+INSERT INTO heimdal.members (name, container, realm, member_name, member_container, member_realm)
 VALUES ('testgroup3', 'GROUP', 'FOO.EXAMPLE', 'testgroup2', 'GROUP', 'FOO.EXAMPLE');
 $$);
 
 SELECT 'test members 3',
        test.test_insert_PKs('test members 3', $$
-INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+INSERT INTO heimdal.members (name, container, realm, member_name, member_container, member_realm)
 VALUES ('testgroup8', 'GROUP', 'FOO.EXAMPLE', 'testgroup9', 'GROUP', 'FOO.EXAMPLE'),
        ('testgroup9', 'GROUP', 'FOO.EXAMPLE', 'testgroup7', 'GROUP', 'FOO.EXAMPLE'),
        ('testgroup7', 'GROUP', 'FOO.EXAMPLE', 'testgroup4', 'GROUP', 'FOO.EXAMPLE'),
@@ -540,18 +550,18 @@ VALUES ('testgroup8', 'GROUP', 'FOO.EXAMPLE', 'testgroup9', 'GROUP', 'FOO.EXAMPL
        ('testgroup9', 'GROUP', 'FOO.EXAMPLE', 'testgroup5', 'GROUP', 'FOO.EXAMPLE');
 $$);
 
-DROP TABLE temp_tc3;
+DROP TABLE IF EXISTS temp_tc3;
 CREATE TEMP TABLE temp_tc3 AS
 SELECT *
 FROM heimdal.tc;
 
 SELECT 'test members 4',
        test.test_insert_PKs('test members 4', $$
-INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+INSERT INTO heimdal.members (name, container, realm, member_name, member_container, member_realm)
 VALUES ('testgroup7', 'GROUP', 'FOO.EXAMPLE', 'testgroup8', 'GROUP', 'FOO.EXAMPLE');
 $$);
 
-DROP TABLE temp_tc4;
+DROP TABLE IF EXISTS temp_tc4;
 CREATE TEMP TABLE temp_tc4 AS
 SELECT *
 FROM heimdal.tc;
@@ -559,13 +569,13 @@ FROM heimdal.tc;
 SELECT 'test delete from heimdal members break 3-loop',
        test.check_against_table('test delete from heimdal members break 3-loop', 'pg_temp', 'temp_tc3', 'heimdal', 'tc', $$
 DELETE FROM heimdal.members
-WHERE parent_name = 'testgroup7' AND
+WHERE name = 'testgroup7' AND
       member_name = 'testgroup8';
 $$);
 
 SELECT 'test insert into heimdal members make 3-loop',
        test.check_against_table('test insert into heimdal members make 3-loop', 'pg_temp', 'temp_tc4', 'heimdal', 'tc', $$
-INSERT INTO heimdal.members (parent_name, parent_container, parent_realm, member_name, member_container, member_realm)
+INSERT INTO heimdal.members (name, container, realm, member_name, member_container, member_realm)
 VALUES ('testgroup7', 'GROUP', 'FOO.EXAMPLE', 'testgroup8', 'GROUP', 'FOO.EXAMPLE');
 $$);
 
@@ -583,29 +593,31 @@ UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",0,"alias_name"}'::TEXT[
 UPDATE x SET entry = jsonb_set(entry::jsonb, '{"aliases",1,"alias_name"}'::TEXT[], to_jsonb('aliasfoo2'::TEXT));
 $$);
 
+SELECT mat_views.refresh_view('heimdal', 'tcu');
+
 SELECT 'test verb user->label 0',
         test.expect_true('test verb user->label 0', $$
-heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'WRITE', 'HEIMDAL_VERB', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
 SELECT 'test verb user->label 1',
         test.expect_true('test verb user->label 1', $$
-heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+heimdal.chk('user0', 'FOO.EXAMPLE', 'USER', 'READ', 'HEIMDAL_VERB', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
 SELECT 'test verb user->label 2',
         test.expect_false('test verb user->label 2', $$
-heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'WRITE', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'WRITE', 'HEIMDAL_VERB', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
 SELECT 'test verb user->label 3',
         test.expect_true('test verb user->label 3', $$
-heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
+heimdal.chk('user2', 'FOO.EXAMPLE', 'USER', 'READ', 'HEIMDAL_VERB', 'VERB', 'testlabel0', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
 SELECT 'test verb user->label 4',
         test.expect_true('test verb user->label 4', $$
-heimdal.chk('user1', 'FOO.EXAMPLE', 'USER', 'READ', 'FOO.EXAMPLE', 'VERB', 'testlabel2', 'FOO.EXAMPLE', 'LABEL')
+heimdal.chk('user1', 'FOO.EXAMPLE', 'USER', 'READ', 'HEIMDAL_VERB', 'VERB', 'testlabel2', 'FOO.EXAMPLE', 'LABEL')
 $$);
 
 SELECT 'test ownership user->user',
@@ -851,6 +863,168 @@ DELETE FROM hdb.hdb WHERE name = 'testfoo';
 DROP TABLE IF EXISTS y;
 CREATE TEMP TABLE y AS 
 SELECT * FROM hdb.hdb WHERE name LIKE 'test0%' AND realm LIKE 'FOO%';
+
+DO $$
+BEGIN
+EXECUTE string_agg(q.code::TEXT, '')
+FROM (SELECT format($q$
+                CREATE OR REPLACE VIEW test.%1$I AS
+                SELECT %2$s
+                FROM heimdal.%1$I t
+                JOIN LATERAL (SELECT TRUE WHERE FALSE
+                              UNION ALL
+                              SELECT TRUE
+                              FROM heimdal.entity_labels l
+                              WHERE t.name = l.name AND
+                                    t.realm = l.realm AND
+                                    t.container = l.container AND
+                                    heimdal.chk((heimdal.split_name('user0@FOO.EXAMPLE'))[1], (heimdal.split_name('user0@FOO.EXAMPLE'))[2], 'USER',
+                                                'SEE', 'HEIMDAL_VERB', 'VERB',
+                                                l.label_name, l.label_realm, l.label_container)
+                              LIMIT 1) v
+                ON TRUE;
+            $q$,
+                    t.table_name,
+                    string_agg('t.' || c.column_name::TEXT, ', '  ORDER BY c.ordinal_position))
+      FROM information_schema.tables t
+      NATURAL
+      JOIN information_schema.columns c
+      WHERE t.table_schema = 'heimdal' AND t.table_name <> 'common' AND
+            t.table_type = 'BASE TABLE' AND t.table_name NOT LIKE 'tc%' AND
+            t.table_name NOT LIKE 'g2dg%' AND t.table_name <> 'digest_types' AND
+            t.table_name <> 'enc_types' AND t.table_name <> 'policies'
+      GROUP BY t.table_name
+      ORDER BY t.table_name) q(code);
+
+EXECUTE string_agg(q.code::TEXT, '')
+FROM (SELECT format($q$
+                CREATE OR REPLACE VIEW test.%1$I AS
+                SELECT %2$s
+                FROM heimdal.%1$I;
+            $q$,
+                    t.table_name,
+                    string_agg(c.column_name::TEXT, ', '  ORDER BY c.ordinal_position))
+      FROM information_schema.tables t
+      NATURAL
+      JOIN information_schema.columns c
+      WHERE t.table_schema = 'heimdal' AND
+                (t.table_name = 'digest_types' OR
+                 t.table_name = 'enc_types' OR
+                 t.table_name = 'policies')
+      GROUP BY t.table_name
+      ORDER BY t.table_name) q(code);
+
+END $$ LANGUAGE PLPGSQL;
+
+CREATE OR REPLACE FUNCTION test.gen_instead_of_trigger(_schema text, _table text, _iverb_name text, _dverb_name text, _verb_realm text)
+RETURNS VOID AS $$
+BEGIN
+    EXECUTE format($q$
+        CREATE OR REPLACE FUNCTION test.%2$I()
+        RETURNS TRIGGER AS $b$
+        DECLARE
+            permit BOOLEAN := TRUE;
+        BEGIN
+            /* First check the NEW row if we have one */
+            IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+                IF NOT (heimdal.chk((heimdal.split_name('user0@FOO.EXAMPLE'))[1], (heimdal.split_name('user0@FOO.EXAMPLE'))[2], 'USER',
+                                    NEW.name, NEW.realm, NEW.container) OR
+                       (SELECT TRUE
+                        FROM heimdal.entity_labels l
+                        WHERE NEW.name = l.name AND
+                              NEW.realm = l.realm AND
+                              NEW.container = l.container AND
+                              heimdal.chk((heimdal.split_name('user0@FOO.EXAMPLE'))[1], (heimdal.split_name('user0@FOO.EXAMPLE'))[2], 'USER',
+                                          %9$L, %11$L, 'VERB',
+                                          l.label_name, l.label_realm, l.label_container)
+                        LIMIT 1)) THEN
+                    permit := FALSE;
+                END IF;
+            END IF;
+
+            /* Next check the OLD row if we have one */
+            IF TG_OP = 'DELETE' OR TG_OP = 'UPDATE' THEN
+                IF NOT (heimdal.chk((heimdal.split_name('user0@FOO.EXAMPLE'))[1], (heimdal.split_name('user0@FOO.EXAMPLE'))[2], 'USER',
+                                    OLD.name, OLD.realm, OLD.container) OR
+                       (SELECT TRUE
+                        FROM heimdal.entity_labels l
+                        WHERE OLD.name = l.name AND
+                              OLD.realm = l.realm AND
+                              OLD.container = l.container AND
+                              heimdal.chk((heimdal.split_name('user0@FOO.EXAMPLE'))[1], (heimdal.split_name('user0@FOO.EXAMPLE'))[2], 'USER',
+                                          %10$L, %11$L, 'VERB',
+                                          l.label_name, l.label_realm, l.label_container)
+                        LIMIT 1)) THEN
+                    RAISE NOTICE 'WTF';
+                    permit := FALSE;
+                END IF;
+            END IF;
+
+            IF TG_OP = 'INSERT' THEN
+                IF permit THEN
+                    RAISE NOTICE 'INSERTING things';
+                    INSERT INTO %1$I.%4$I (%5$s)
+                    SELECT %6$s;
+                ELSE
+                    RAISE NOTICE 'NOT INSERTING things';
+                END IF;
+                RETURN NEW;
+            ELSIF TG_OP = 'UPDATE' THEN
+                IF permit THEN
+                    RAISE NOTICE 'UPDATING things';
+                    UPDATE %1$I.%4$I
+                    SET %7$s;
+                ELSE
+                    RAISE NOTICE 'NOT UPDATING things';
+                END IF;
+                RETURN NEW;
+            ELSIF TG_OP = 'DELETE' THEN
+                IF permit THEN
+                    RAISE NOTICE 'DELETING things';
+                    DELETE FROM %1$I.%4$I
+                    WHERE %8$s;
+                ELSE
+                    RAISE NOTICE 'NOT DELETING things';
+                END IF;
+                RETURN OLD;
+            ELSE /* TRUNCATE -- do nothing */
+                RETURN null;
+            END IF;
+        END; $b$ LANGUAGE PLPGSQL;
+
+        CREATE TRIGGER %3$I
+        INSTEAD OF INSERT OR UPDATE OR DELETE
+        ON test.%4$I
+        FOR EACH ROW
+        EXECUTE FUNCTION test.%2$I();
+        $q$,
+        /* %1$I schema name */      _schema,
+        /* %2$I function name */    _table || '_iud_security_func',
+        /* %3$I function name */    _table || '_iud_security_trigger',
+        /* %4$I table name */       _table,
+        /* insert into (%5$s) */    string_agg(c.column_name::TEXT, ', '  ORDER BY c.ordinal_position),
+        /* insert into select %6$s */string_agg(format('coalesce(NEW.%1$I, %2$s)',
+                                                    c.column_name::text, coalesce(c.column_default::text, 'null')),
+                                                ', ' ORDER BY c.ordinal_position),
+        /* %7$s update list */      string_agg(c.column_name::text || ' = NEW.' || c.column_name::text, ', '),
+        /* %8$s delete list */      string_agg(
+                                        format('((%1$I IS NULL AND OLD.%1$I IS NULL) OR
+                                                (%1$I IS NOT NULL AND OLD.%1$I IS NOT NULL AND %1$I = OLD.%1$I))',
+                                               c.column_name::text),
+                                        ' AND '
+                                    ),
+        /* %9$l _iverb_name */      _iverb_name,
+        /* %10$l _dverb_name */     _dverb_name,
+        /* %11$l _verb_realm */     _verb_realm
+        )
+    FROM information_schema.columns c
+    WHERE c.table_schema = _schema AND c.table_name = _table;
+    RAISE NOTICE 'CREATED TRIGGER FOR %.%', _schema, _table;
+END; $$ LANGUAGE PLPGSQL;
+
+SELECT test.gen_instead_of_trigger('heimdal', 'members', 'INSERT', 'DELETE', 'HEIMDAL_VERB');
+
+SELECT test.gen_instead_of_trigger('heimdal', 'aliases', 'INSERT', 'DELETE', 'HEIMDAL_VERB');
 
 SELECT CASE count(*) WHEN 0 THEN 'NO EXCEPTIONS THROWN' ELSE 'SOME EXCEPTIONS THROWN' END
 FROM (

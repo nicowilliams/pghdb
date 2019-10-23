@@ -25,21 +25,20 @@ CREATE SCHEMA IF NOT EXISTS heimdal;
  * These will also map INSERT/UPDATE/DELETE operations on the main hdb view
  * into corresponding INSERT/UPDATE/DELETE operations on heimdal tables.
  */
-DROP SCHEMA IF EXISTS hdb CASCADE;
 CREATE SCHEMA IF NOT EXISTS hdb;
 /*
  * Views and functions for PostgREST APIs go in the schema "pgt".
  */
-DROP SCHEMA IF EXISTS pgt;
 CREATE SCHEMA IF NOT EXISTS pgt;
 
 CREATE OR REPLACE FUNCTION heimdal.split_name(name TEXT)
 RETURNS TEXT[]
 LANGUAGE SQL AS $$
-    SELECT CASE WHEN name ~ '^[^@]*$' THEN ARRAY[name,'']
-                WHEN NOT name ~ '^[@]' THEN ARRAY['', substring(name FROM 2)]
-                ELSE ARRAY[trim(TRAILING '@' FROM substring(name FROM '^.*[^\\]?[@]')),
-                           substring(substring(name FROM '[^\\]?[@].*$') FROM 3)]
+    SELECT CASE WHEN name !~ '' THEN ARRAY[name,'']
+                WHEN name ~ '^[@]' THEN ARRAY['', substring(name FROM 2)]
+                WHEN name ~ '[@]' THEN  ARRAY[trim(TRAILING '@' FROM substring(name FROM '^.*[@]')),
+                           substring(substring(name FROM '[@].*$') FROM 2)]
+                ELSE ARRAY[name,'']
            END;
 $$ IMMUTABLE;
 
@@ -200,6 +199,28 @@ CREATE TABLE IF NOT EXISTS heimdal.entities (
                         ON UPDATE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS heimdal.entity_labels (
+    name                TEXT,
+    realm               TEXT,
+    container           heimdal.containers,
+    label_name          TEXT,
+    label_realm         TEXT,
+    label_container     heimdal.containers
+                        DEFAULT ('LABEL')
+                        CHECK (label_container = 'LABEL'),
+    LIKE heimdal.common INCLUDING ALL,
+    CONSTRAINT helpk    PRIMARY KEY (name, realm, container,
+                                     label_name, label_realm, label_container),
+    CONSTRAINT helefk   FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE,
+    CONSTRAINT hellfk   FOREIGN KEY (label_name, label_realm, label_container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS heimdal.principals (
     display_name        TEXT,
     name                TEXT,
@@ -263,15 +284,15 @@ CREATE TABLE IF NOT EXISTS heimdal.principal_flags(
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.members (
-    parent_name         TEXT,
-    parent_realm        TEXT,
-    parent_container    heimdal.containers,
+    name                TEXT,
+    realm               TEXT,
+    container           heimdal.containers,
     member_name         TEXT,
     member_realm        TEXT,
     member_container    heimdal.containers,
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hmpk     PRIMARY KEY (parent_name, parent_realm, parent_container, member_name, member_realm, member_container),
-    CONSTRAINT hmfkp    FOREIGN KEY (parent_name, parent_realm, parent_container)
+    CONSTRAINT hmpk     PRIMARY KEY (name, realm, container, member_name, member_realm, member_container),
+    CONSTRAINT hmfkp    FOREIGN KEY (name, realm, container)
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
@@ -383,19 +404,19 @@ CREATE TABLE IF NOT EXISTS heimdal.pkinit_cert_names (
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.roles2verbs (
-    role_name           TEXT,
-    role_realm          TEXT,
-    role_container      heimdal.containers
+    name                TEXT,
+    realm               TEXT,
+    container           heimdal.containers
                         DEFAULT ('ROLE')
-                        CHECK (role_container = 'ROLE'),
+                        CHECK (container = 'ROLE'),
     verb_name           TEXT,
     verb_realm          TEXT,
     verb_container      heimdal.containers
                         DEFAULT ('VERB')
                         CHECK (verb_container = 'VERB'),
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hrpk    PRIMARY KEY (role_name, role_realm, role_container, verb_name, verb_realm, verb_container),
-    CONSTRAINT hrfkr   FOREIGN KEY (role_name, role_realm, role_container)
+    CONSTRAINT hrpk    PRIMARY KEY (name, realm, container, verb_name, verb_realm, verb_container),
+    CONSTRAINT hrfkr   FOREIGN KEY (name, realm, container)
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
@@ -406,9 +427,13 @@ CREATE TABLE IF NOT EXISTS heimdal.roles2verbs (
 );
 
 CREATE TABLE IF NOT EXISTS heimdal.grants (
-    label_name           TEXT,
-    label_realm          TEXT,
-    label_container      heimdal.containers
+    name                TEXT,
+    realm               TEXT,
+    container           heimdal.containers
+                        CHECK (container = 'GROUP' OR container = 'USER'),
+    label_name          TEXT,
+    label_realm         TEXT,
+    label_container     heimdal.containers
                         DEFAULT ('LABEL')
                         CHECK (label_container = 'LABEL'),
     role_name           TEXT,
@@ -416,23 +441,19 @@ CREATE TABLE IF NOT EXISTS heimdal.grants (
     role_container      heimdal.containers
                         DEFAULT ('ROLE')
                         CHECK (role_container = 'ROLE'),
-    grantee_name        TEXT,
-    grantee_realm       TEXT,
-    grantee_container   heimdal.containers
-                        CHECK (grantee_container = 'GROUP' OR grantee_container = 'USER'),
     LIKE heimdal.common INCLUDING ALL,
-    CONSTRAINT hgpk    PRIMARY KEY (label_name, label_realm, label_container,
-                                    role_name, role_realm, role_container,
-                                    grantee_name, grantee_realm, grantee_container),
+    CONSTRAINT hgpk    PRIMARY KEY (name, realm, container,
+                                    label_name, label_realm, label_container,
+                                    role_name, role_realm, role_container),
+    CONSTRAINT hgfks   FOREIGN KEY (name, realm, container)
+                        REFERENCES heimdal.entities (name, realm, container)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE,
     CONSTRAINT hgfkl   FOREIGN KEY (label_name, label_realm, label_container)
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE,
     CONSTRAINT hgfkr   FOREIGN KEY (role_name, role_realm, role_container)
-                        REFERENCES heimdal.entities (name, realm, container)
-                        ON DELETE CASCADE
-                        ON UPDATE CASCADE,
-    CONSTRAINT hgfks   FOREIGN KEY (grantee_name, grantee_realm, grantee_container)
                         REFERENCES heimdal.entities (name, realm, container)
                         ON DELETE CASCADE
                         ON UPDATE CASCADE
@@ -441,14 +462,14 @@ CREATE TABLE IF NOT EXISTS heimdal.grants (
 CREATE OR REPLACE VIEW heimdal.tc_view AS
 WITH RECURSIVE groups AS (
     /* Seed with every group includes itself -- this is important */
-    SELECT name AS parent_name, realm AS parent_realm, container AS parent_container,
+    SELECT name AS name, realm AS realm, container AS container,
            name AS member_name, realm AS member_realm, container AS member_container
     FROM heimdal.entities WHERE entity_type = 'GROUP'
     UNION
     /* Get the parents of all groups */
-    SELECT m.parent_name, m.parent_realm, m.parent_container,
+    SELECT m.name, m.realm, m.container,
            g.member_name, g.member_realm, g.member_container
-    FROM heimdal.members m JOIN groups g ON (m.member_name = g.parent_name AND m.member_realm = g.parent_realm AND m.member_container = g.parent_container)
+    FROM heimdal.members m JOIN groups g ON (m.member_name = g.name AND m.member_realm = g.realm AND m.member_container = g.container)
 )
 SELECT * FROM groups;
 
@@ -459,23 +480,23 @@ SELECT mat_views.refresh_view('heimdal','tc');
 /* Look 'ma!  PG's MAT VIEWs do not allow this: */
 ALTER TABLE heimdal.tc
     ADD CONSTRAINT htcpk1
-        PRIMARY KEY (parent_name, parent_realm, parent_container,
+        PRIMARY KEY (name, realm, container,
                      member_name, member_realm, member_container);
 /* nor this! */
 CREATE INDEX tc2 ON heimdal.tc
     (member_name, member_realm, member_container,
-     parent_name, parent_realm, parent_container);
+     name, realm, container);
 
 /* Now a view for all the users' group memerships */
 CREATE OR REPLACE VIEW heimdal.tcu_view AS
-SELECT tc.parent_name AS parent_name, tc.parent_realm AS parent_realm,
-       tc.parent_container AS parent_container, e.name AS member_name,
+SELECT tc.name AS name, tc.realm AS realm,
+       tc.container AS container, e.name AS member_name,
        e.realm AS member_realm, e.container AS member_container
 FROM heimdal.entities e
 /* get direct memberships */
 JOIN heimdal.members m ON (e.name = m.member_name AND e.realm = m.member_realm AND e.container = m.member_container)
 /* get all remaining indirect memberships */
-JOIN heimdal.tc tc ON (tc.member_name = m.parent_name AND tc.member_realm = m.parent_realm AND tc.member_container = m.parent_container)
+JOIN heimdal.tc tc ON (tc.member_name = m.name AND tc.member_realm = m.realm AND tc.member_container = m.container)
 WHERE e.entity_type = 'USER'
 UNION
 SELECT e.name, e.realm, e.container, e.name, e.realm, e.container
@@ -488,23 +509,23 @@ SELECT mat_views.refresh_view('heimdal','tcu');
 
 ALTER TABLE heimdal.tcu
     ADD CONSTRAINT htcupk1
-        PRIMARY KEY (parent_name, parent_realm, parent_container,
+        PRIMARY KEY (name, realm, container,
                      member_name, member_realm, member_container);
 
 CREATE INDEX tcu2 ON heimdal.tcu
     (member_name, member_realm, member_container,
-     parent_name, parent_realm, parent_container);
+     name, realm, container);
 
 CREATE OR REPLACE VIEW heimdal.grants2direct_grantees AS
-SELECT g.label_name AS label_name,
+SELECT g.name AS name, g.realm AS realm,
+       g.container AS container, g.label_name AS label_name,
        g.label_realm AS label_realm, g.label_container AS label_container,
        rv.verb_name AS verb_name, rv.verb_realm AS verb_realm,
-       rv.verb_container AS verb_container, g.grantee_name AS grantee_name,
-       g.grantee_realm AS grantee_realm, g.grantee_container AS grantee_container
+       rv.verb_container AS verb_container
 FROM heimdal.roles2verbs rv
-JOIN heimdal.grants g ON rv.role_name = g.role_name AND
-                         rv.role_realm = g.role_realm AND
-                         rv.role_container = g.role_container;
+JOIN heimdal.grants g ON rv.name = g.role_name AND
+                         rv.realm = g.role_realm AND
+                         rv.container = g.role_container;
 
 SELECT mat_views.create_view('heimdal','g2dg','heimdal','grants2direct_grantees');
 
@@ -513,11 +534,11 @@ SELECT mat_views.refresh_view('heimdal','g2dg');
 ALTER TABLE heimdal.g2dg
     ADD CONSTRAINT hgdgpk1
         PRIMARY KEY (label_name, label_realm, label_container,
-                     grantee_name, grantee_realm, grantee_container,
+                     name, realm, container,
                      verb_name, verb_realm, verb_container);
 
 CREATE INDEX g2dg2 ON heimdal.g2dg
-    (grantee_name, grantee_realm, grantee_container,
+    (name, realm, container,
      label_name, label_realm, label_container,
      verb_name, verb_realm, verb_container);
 
@@ -673,15 +694,15 @@ WHERE a.container = 'PRINCIPAL' AND
 /* Create check function -L */
 
 CREATE OR REPLACE FUNCTION heimdal.chk(
-        _grantee_name TEXT, _grantee_realm TEXT, _grantee_container heimdal.containers,
+        _name TEXT, _realm TEXT, _container heimdal.containers,
         _object_name TEXT, _object_realm TEXT, _object_container heimdal.containers)
 RETURNS BOOLEAN AS $$
     SELECT count(*) <> 0
     FROM (
-            SELECT parent_name, parent_realm, parent_container
+            SELECT name, realm, container
             FROM heimdal.tcu
-            WHERE member_name = _grantee_name AND member_realm = _grantee_realm AND
-                  member_container = _grantee_container
+            WHERE member_name = _name AND member_realm = _realm AND
+                  member_container = _container
         INTERSECT
             SELECT owner_name, owner_realm, owner_container
             FROM heimdal.entities
@@ -691,18 +712,18 @@ RETURNS BOOLEAN AS $$
 ; $$ LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION heimdal.chk(
-        _grantee_name TEXT, _grantee_realm TEXT, _grantee_container heimdal.containers,
+        _name TEXT, _realm TEXT, _container heimdal.containers,
         _verb_name TEXT, _verb_realm TEXT, _verb_container heimdal.containers,
         _label_name TEXT, _label_realm TEXT, _label_container heimdal.containers)
 RETURNS BOOLEAN AS $$
     SELECT count(*) <> 0
     FROM (
-            SELECT parent_name, parent_realm, parent_container
+            SELECT name, realm, container
             FROM heimdal.tcu
-            WHERE member_name = _grantee_name AND member_realm = _grantee_realm AND
-                  member_container = _grantee_container
+            WHERE member_name = _name AND member_realm = _realm AND
+                  member_container = _container
         INTERSECT
-            SELECT grantee_name, grantee_realm, grantee_container
+            SELECT name, realm, container
             FROM heimdal.g2dg
             WHERE label_name = _label_name AND label_realm = _label_realm AND
                   label_container = _label_container AND
@@ -719,7 +740,7 @@ CREATE OR REPLACE FUNCTION heimdal.trigger_on_entities_func()
 RETURNS TRIGGER AS $$
 BEGIN
     IF TG_OP = 'INSERT' AND NEW.entity_type = 'GROUP' THEN
-        INSERT INTO heimdal.tc (parent_name, parent_realm, parent_container,
+        INSERT INTO heimdal.tc (name, realm, container,
                                 member_name, member_realm, member_container)
         SELECT NEW.name, NEW.realm, NEW.container,
                NEW.name, NEW.realm, NEW.container;
@@ -781,10 +802,10 @@ BEGIN
     /* DELETE GOES HERE */
     IF TG_OP = 'DELETE' THEN
         WITH RECURSIVE parents AS (
-            SELECT OLD.parent_name AS name, OLD.parent_realm AS realm,
-                   OLD.parent_container AS container
+            SELECT OLD.name AS name, OLD.realm AS realm,
+                   OLD.container AS container
             UNION
-            SELECT m.parent_name, m.parent_realm, m.parent_container
+            SELECT m.name, m.realm, m.container
             FROM heimdal.members m
             JOIN parents p ON m.member_name = p.name AND
                               m.member_realm = p.realm AND
@@ -795,32 +816,32 @@ BEGIN
             UNION
             SELECT m.member_name, m.member_realm, m.member_container
             FROM heimdal.members m
-            JOIN rmembers mem ON m.parent_name = mem.name AND
-                                 m.parent_realm = mem.realm AND
-                                 m.parent_container = mem.container
+            JOIN rmembers mem ON m.name = mem.name AND
+                                 m.realm = mem.realm AND
+                                 m.container = mem.container
         ), exceptions AS (
             SELECT mem.name AS member_name,
                    mem.realm AS member_realm,
                    mem.container AS member_container,
-                   mem.name AS parent_name,
-                   mem.realm AS parent_realm,
-                   mem.container AS parent_container
+                   mem.name AS name,
+                   mem.realm AS realm,
+                   mem.container AS container
             FROM rmembers mem
             UNION
             SELECT exc.member_name,
                    exc.member_realm,
                    exc.member_container,
-                   m.parent_name,
-                   m.parent_realm,
-                   m.parent_container
+                   m.name,
+                   m.realm,
+                   m.container
             FROM heimdal.members m
-            JOIN exceptions exc ON m.member_name = exc.parent_name AND
-                                   m.member_realm = exc.parent_realm AND
-                                   m.member_container = exc.parent_container
+            JOIN exceptions exc ON m.member_name = exc.name AND
+                                   m.member_realm = exc.realm AND
+                                   m.member_container = exc.container
         ), deletions AS (
-            SELECT p.name AS parent_name,
-                   p.realm AS parent_realm,
-                   p.container AS parent_container,
+            SELECT p.name AS name,
+                   p.realm AS realm,
+                   p.container AS container,
                    m.name AS member_name,
                    m.realm AS member_realm,
                    m.container AS member_container
@@ -829,9 +850,9 @@ BEGIN
             CROSS JOIN
             rmembers m
             EXCEPT
-            SELECT exc.parent_name,
-                   exc.parent_realm,
-                   exc.parent_container,
+            SELECT exc.name,
+                   exc.realm,
+                   exc.container,
                    exc.member_name,
                    exc.member_realm,
                    exc.member_container
@@ -840,9 +861,9 @@ BEGIN
 
         DELETE FROM heimdal.tc AS tc
         USING deletions d
-        WHERE tc.parent_name = d.parent_name AND
-              tc.parent_realm = d.parent_realm AND
-              tc.parent_container = d.parent_container AND
+        WHERE tc.name = d.name AND
+              tc.realm = d.realm AND
+              tc.container = d.container AND
               tc.member_name = d.member_name AND
               tc.member_realm = d.member_realm AND
               tc.member_container = d.member_container;
@@ -854,8 +875,8 @@ BEGIN
 
     IF NOT EXISTS
         (SELECT 1 FROM heimdal.entities e
-         WHERE e.name = NEW.parent_name AND e.realm = NEW.parent_realm AND
-               e.container = NEW.parent_container AND e.entity_type = 'GROUP') OR
+         WHERE e.name = NEW.name AND e.realm = NEW.realm AND
+               e.container = NEW.container AND e.entity_type = 'GROUP') OR
        NOT EXISTS
         (SELECT 1 FROM heimdal.entities e
          WHERE e.name = NEW.member_name AND e.realm = NEW.member_realm AND
@@ -865,9 +886,9 @@ BEGIN
     END IF;
 
     WITH RECURSIVE parents AS (
-        SELECT NEW.parent_name AS name, NEW.parent_realm AS realm, NEW.parent_container AS container
+        SELECT NEW.name AS name, NEW.realm AS realm, NEW.container AS container
         UNION
-        SELECT m.parent_name, m.parent_realm, m.parent_container
+        SELECT m.name, m.realm, m.container
         FROM heimdal.members m
         JOIN parents p ON (m.member_name = p.name AND
                            m.member_realm = p.realm AND
@@ -878,11 +899,11 @@ BEGIN
         UNION
         SELECT m.member_name, m.member_realm, m.member_container
         FROM heimdal.members m
-        JOIN rmembers mem ON (m.parent_name = mem.name AND
-                             m.parent_realm = mem.realm AND
-                             m.parent_container = mem.container)
+        JOIN rmembers mem ON (m.name = mem.name AND
+                             m.realm = mem.realm AND
+                             m.container = mem.container)
     )
-    INSERT INTO heimdal.tc (parent_name, parent_realm, parent_container,
+    INSERT INTO heimdal.tc (name, realm, container,
                             member_name, member_realm, member_container)
     SELECT p.name, p.realm, p.container,
            m.name, m.realm, m.container
@@ -922,31 +943,31 @@ BEGIN
                 SELECT OLD.label_name AS label_name, OLD.label_realm AS label_realm,
                        OLD.label_container AS label_container, rv.verb_name AS verb_name,
                        rv.verb_realm AS verb_realm, rv.verb_container AS verb_container,
-                       OLD.grantee_name AS grantee_name, OLD.grantee_realm AS grantee_realm,
-                       OLD.grantee_container AS grantee_container
+                       OLD.name AS name, OLD.realm AS realm,
+                       OLD.container AS container
                 FROM
                 heimdal.roles2verbs rv
             EXCEPT
                 SELECT gt.label_name, gt.label_realm, gt.label_container,
                        rv.verb_name, rv.verb_realm, rv.verb_container,
-                       gt.grantee_name, gt.grantee_realm, gt.grantee_container
+                       gt.name, gt.realm, gt.container
                 FROM
                 heimdal.grants gt
                 JOIN
                 heimdal.roles2verbs rv
-                ON rv.role_name = gt.role_name AND rv.role_realm = gt.role_realm AND
-                   rv.role_container = gt.role_container
+                ON rv.name = gt.role_name AND rv.realm = gt.role_realm AND
+                   rv.container = gt.role_container
                 WHERE gt.label_name = OLD.label_name AND gt.label_realm = OLD.label_realm AND
-                      gt.label_container = OLD.label_container AND gt.grantee_name = OLD.grantee_name AND
-                      gt.grantee_realm = OLD.grantee_realm AND gt.grantee_container = OLD.grantee_container
+                      gt.label_container = OLD.label_container AND gt.name = OLD.name AND
+                      gt.realm = OLD.realm AND gt.container = OLD.container
         )
         DELETE FROM heimdal.g2dg g2dg
         USING deletions d
         WHERE g2dg.label_name = d.label_name AND g2dg.label_realm = d.label_realm AND
               g2dg.label_container = d.label_container AND g2dg.verb_name = d.verb_name AND
               g2dg.verb_realm = d.verb_realm AND g2dg.verb_container = d.verb_container AND
-              g2dg.grantee_name = d.grantee_name AND g2dg.grantee_realm = d.grantee_realm AND
-              g2dg.grantee_container = d.grantee_container;
+              g2dg.name = d.name AND g2dg.realm = d.realm AND
+              g2dg.container = d.container;
 
         RETURN OLD;
     END IF;
@@ -961,22 +982,22 @@ BEGIN
                e.container = NEW.role_container AND e.entity_type = 'ROLE') OR
        NOT EXISTS
         (SELECT 1 FROM heimdal.entities e
-         WHERE e.name = NEW.grantee_name AND e.realm = NEW.grantee_realm AND
-               e.container = NEW.grantee_container AND
+         WHERE e.name = NEW.name AND e.realm = NEW.realm AND
+               e.container = NEW.container AND
                (e.entity_type = 'GROUP' OR e.entity_type = 'USER')) THEN
         RETURN NULL; /* XXX Raise instead */
     END IF;
 
     INSERT INTO heimdal.g2dg /* XXX name of view */ (label_name, label_realm, label_container,
                                                      verb_name, verb_realm, verb_container,
-                                                     grantee_name, grantee_realm, grantee_container)
+                                                     name, realm, container)
     SELECT NEW.label_name, NEW.label_realm, NEW.label_container,
            rv.verb_name, rv.verb_realm, rv.verb_container,
-           NEW.grantee_name, NEW.grantee_realm, NEW.grantee_container
+           NEW.name, NEW.realm, NEW.container
     FROM
     heimdal.roles2verbs rv
-    WHERE rv.role_name = NEW.role_name AND
-          rv.role_realm = NEW.role_realm AND rv.role_container = NEW.role_container
+    WHERE rv.name = NEW.role_name AND
+          rv.realm = NEW.role_realm AND rv.container = NEW.role_container
     ON CONFLICT DO NOTHING;
 
     RETURN NEW;
